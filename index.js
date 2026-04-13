@@ -42,21 +42,40 @@ let memory = [];
 // 👥 ACTIVE USERS
 let activeUsers = new Map();
 
-// 🚨 BOT LIMIT SAFETY
-let botMessageTimestamps = [];
-const MAX_MESSAGES_PER_MIN = 3;
+// 🧠 RELATIONSHIP SYSTEM
+let relationships = {};
 
-// 🧠 PERSONALITY SYSTEM
-let attention = 0.5;
-let fatigue = 0;
-let introversion = 0.85;
-
-let affection = {};
-
-function getAffection(userId) {
-  if (!affection[userId]) affection[userId] = 0;
-  return affection[userId];
+function getRelationship(userId) {
+  if (!relationships[userId]) {
+    relationships[userId] = {
+      affection: 0,
+      familiarity: 0,
+      lastInteraction: 0,
+      tier: "stranger"
+    };
+  }
+  return relationships[userId];
 }
+
+function updateTier(rel) {
+  const score = rel.affection + rel.familiarity;
+
+  if (score < 0.5) rel.tier = "stranger";
+  else if (score < 2) rel.tier = "acquaintance";
+  else if (score < 5) rel.tier = "friend";
+  else if (score < 10) rel.tier = "close_friend";
+  else rel.tier = "trusted";
+}
+
+// 🚨 BOT LIMIT SYSTEM (5/min strict)
+let botMessageTimestamps = [];
+const MAX_MESSAGES_PER_MIN = 5;
+const WINDOW_MS = 60000;
+
+// 🧠 PERSONALITY
+let attention = 0.55;
+let fatigue = 0;
+let introversion = 0.65;
 
 // 🎭 MOOD SYSTEM
 const moods = ["happy", "shy", "playful", "tired", "jealous"];
@@ -69,11 +88,20 @@ setInterval(() => {
 // 🧠 ATTENTION DRIFT
 setInterval(() => {
   attention += (Math.random() - 0.5) * 0.15;
-  attention += 0.03; // recovery when idle
+  attention += 0.03;
   attention = Math.max(0, Math.min(1, attention));
 }, 15000);
 
-// 👥 RANDOM USER HELPER
+// 🧠 MEMORY DECAY + TIER UPDATE
+setInterval(() => {
+  for (const id in relationships) {
+    relationships[id].familiarity *= 0.999;
+    relationships[id].affection *= 0.999;
+    updateTier(relationships[id]);
+  }
+}, 60000);
+
+// 👥 RANDOM ACTIVE USER
 function getRandomActiveUser() {
   const now = Date.now();
 
@@ -89,19 +117,53 @@ function getRandomActiveUser() {
 // 🧹 CLEAN BOT HISTORY
 function cleanBotHistory() {
   const now = Date.now();
+
   botMessageTimestamps = botMessageTimestamps.filter(
-    (t) => now - t < 60000
+    (t) => now - t < WINDOW_MS
   );
 }
+
+// 🗣️ IDLE CONVERSATION STARTER
+let lastBotSpeakTime = Date.now();
+
+setInterval(async () => {
+  const now = Date.now();
+  if (now - lastBotSpeakTime < 90000 + Math.random() * 90000) return;
+
+  if (activeUsers.size === 0) return;
+
+  const users = [...activeUsers.keys()];
+  const targetId = users[Math.floor(Math.random() * users.length)];
+
+  const rel = getRelationship(targetId);
+
+  if (rel.familiarity < 0.2 && Math.random() < 0.7) return;
+
+  const prompts = [
+    "what are you all doing",
+    "this server is kinda quiet",
+    "i'm bored lol",
+    "anyone here",
+    "random question... what's your favorite song?"
+  ];
+
+  const prompt = prompts[Math.floor(Math.random() * prompts.length)];
+
+  try {
+    const channel = client.channels.cache.find(c => c.isTextBased?.());
+    if (!channel) return;
+
+    await channel.send(prompt);
+    lastBotSpeakTime = now;
+  } catch (e) {
+    console.error("idle convo error:", e);
+  }
+}, 45000);
 
 // ✅ READY
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
-
-// ⚠️ LOGGING
-client.on("error", console.error);
-client.on("warn", console.warn);
 
 // 💬 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
@@ -113,54 +175,57 @@ client.on("messageCreate", async (message) => {
 
     activeUsers.set(userId, now);
 
-    // 💖 AFFECTION SYSTEM
-    if (userId === CRUSH_ID) {
-      affection[userId] = (affection[userId] || 0) + 0.03;
-      attention += 0.4;
-    } else {
-      affection[userId] = (affection[userId] || 0) + 0.005;
-    }
+    const rel = getRelationship(userId);
 
-    // 💤 introvert social drain
+    // 💖 relationship growth
+    rel.affection += userId === CRUSH_ID ? 0.03 : 0.005;
+    rel.familiarity += 0.01;
+    rel.lastInteraction = now;
+
+    updateTier(rel);
+
+    // 🧠 attention system
+    if (userId === CRUSH_ID) attention += 0.4;
     attention -= introversion * 0.05;
     fatigue += 0.01;
 
-    // 🧠 base detection
     const isMentioned =
       message.content.includes(`<@${client.user.id}>`) ||
       message.content.includes(`<@!${client.user.id}>`);
 
-    let shouldReply = isMentioned || Math.random() < 0.03;
+    let shouldReply = isMentioned || Math.random() < 0.08;
 
-    // 💖 affection boost
-    let affectionBoost = getAffection(userId) * 0.3;
+    let affectionBoost = rel.affection * 0.5;
 
-    // 🎯 attention-based activity
+    let tierBoost = 0;
+    switch (rel.tier) {
+      case "stranger": tierBoost = 0; break;
+      case "acquaintance": tierBoost = 0.02; break;
+      case "friend": tierBoost = 0.05; break;
+      case "close_friend": tierBoost = 0.1; break;
+      case "trusted": tierBoost = 0.15; break;
+    }
+
     const activityChance =
-      0.02 + attention * 0.2 + affectionBoost;
+      0.05 + attention * 0.3 + affectionBoost + tierBoost;
 
-    // 💤 introvert silence chance
-    const introvertSilence = Math.random() < introversion * 0.6;
+    const introvertSilence = Math.random() < introversion * 0.4;
 
     if (!shouldReply) {
       shouldReply = !introvertSilence && Math.random() < activityChance;
     }
 
-    // 🚨 HARD LIMIT (prevents spam)
+    // 🚨 5 MESSAGES PER MIN LIMIT
     cleanBotHistory();
 
     if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) {
       return;
     }
 
-    // ⏱️ cooldown (human-like)
-    const cooldown = 5000 + Math.random() * 15000;
-
+    const cooldown = 4000 + Math.random() * 12000;
     const lastTime = botMessageTimestamps.at(-1) || 0;
-    if (now - lastTime < cooldown) {
-      return;
-    }
 
+    if (now - lastTime < cooldown) return;
     if (!shouldReply) return;
 
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
@@ -168,9 +233,9 @@ client.on("messageCreate", async (message) => {
     memory.push({ role: "user", content: prompt });
     if (memory.length > 10) memory.shift();
 
-    await new Promise((r) => setTimeout(r, 600 + Math.random() * 1200));
+    await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
 
-    // 🤖 GROQ CALL
+    // 🤖 AI CALL
     let response;
 
     try {
@@ -183,24 +248,21 @@ client.on("messageCreate", async (message) => {
             {
               role: "system",
               content: `
-You are a shy introverted Volga Tatar girl on Discord.
+You are a shy introverted Discord girl.
 
-Current mood: ${currentMood}
+Mood: ${currentMood}
 
-Personality:
-- very introverted
-- short replies (1–2 sentences max)
-- sometimes awkward or quiet
-- prefers listening over talking
-- reacts more to a specific user she likes
+Relationship tiers:
+- stranger: distant, minimal replies
+- acquaintance: polite
+- friend: warm
+- close_friend: talkative
+- trusted: very comfortable
 
-Behavior:
-- sometimes ignores messages
-- changes topic randomly
-- can be shy, soft, or playful
-- reacts more to crush user
-- never sounds like AI
-- never writes long messages
+Always:
+- short replies
+- natural tone
+- never sound like AI
               `,
             },
             ...memory,
@@ -210,22 +272,18 @@ Behavior:
             },
           ],
         }),
-
         new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("Groq timeout")), 8000)
+          setTimeout(() => reject(new Error("timeout")), 8000)
         ),
       ]);
     } catch (err) {
-      console.error("Groq error:", err);
       return message.reply("i'm kinda slow rn...");
     }
 
-    let reply =
-      response?.choices?.[0]?.message?.content || "idk what to say lol";
+    let reply = response?.choices?.[0]?.message?.content || "idk";
 
-    // 💬 occasional dry human response
     if (Math.random() < 0.15) {
-      const dry = ["lol", "idk", "maybe", "hmm", "ok", "what", "eh"];
+      const dry = ["lol", "idk", "maybe", "hmm", "ok"];
       reply = dry[Math.floor(Math.random() * dry.length)];
     }
 
@@ -234,19 +292,18 @@ Behavior:
 
     reply = reply.slice(0, 2000);
 
-    const randomUserId = getRandomActiveUser();
-
-    if (randomUserId && Math.random() < 0.15) {
-      await message.channel.send(`<@${randomUserId}> ${reply}`);
-    } else {
-      await message.reply(reply);
+    if (Math.random() < 0.15) {
+      const users = [...activeUsers.keys()];
+      const randomUser = users[Math.floor(Math.random() * users.length)];
+      return message.channel.send(`<@${randomUser}> ${reply}`);
     }
 
-    // 🚨 TRACK BOT MESSAGE
+    await message.reply(reply);
+
     botMessageTimestamps.push(now);
 
-  } catch (error) {
-    console.error("❌ Message handler error:", error);
+  } catch (err) {
+    console.error(err);
   }
 });
 
