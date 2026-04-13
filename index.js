@@ -126,4 +126,85 @@ client.on("messageCreate", async (message) => {
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
     memory.push({ role: "user", content: prompt });
-    if (memory.length
+    if (memory.length > 6) memory.shift();
+
+    await new Promise((res) =>
+      setTimeout(res, 1000 + Math.random() * 2000)
+    );
+
+    // 🚀 GROQ CALL (NOW WITH TIMEOUT PROTECTION)
+    let response;
+
+    try {
+      response = await Promise.race([
+        groq.chat.completions.create({
+          model: "llama-3.3-70b-versatile",
+          max_tokens: 60,
+          temperature: 0.9,
+          messages: [
+            {
+              role: "system",
+              content: `
+You are a Volga Tatar girl chatting on Discord.
+
+Current mood: ${currentMood}
+
+Personality:
+- short replies (1–2 sentences max)
+- casual, lowercase sometimes
+- playful, slightly shy
+- loves volleyball
+- has a crush on one boy
+
+Mood behavior:
+- happy: energetic
+- shy: soft, awkward
+- playful: teasing
+- jealous: slightly annoyed
+- tired: dry, low energy
+
+Never sound like AI. Never write long messages.
+              `,
+            },
+            ...memory,
+            {
+              role: "user",
+              content: prompt || "say something casual",
+            },
+          ],
+        }),
+
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("Groq timeout")), 8000)
+        ),
+      ]);
+    } catch (err) {
+      console.error("Groq error:", err);
+      return message.reply("i'm kinda slow rn...");
+    }
+
+    let reply =
+      response?.choices?.[0]?.message?.content || "idk what to say lol";
+
+    memory.push({ role: "assistant", content: reply });
+    if (memory.length > 6) memory.shift();
+
+    reply = reply.slice(0, 2000);
+
+    const randomUserId = getRandomActiveUser();
+
+    if (randomUserId && Math.random() < 0.1) {
+      await message.channel.send(`<@${randomUserId}> ${reply}`);
+    } else {
+      await message.reply(reply);
+    }
+
+    lastReplyTime = Date.now();
+
+  } catch (error) {
+    console.error("❌ Message handler error:", error);
+  }
+});
+
+// 🚀 login
+client.login(process.env.DISCORD_TOKEN);
