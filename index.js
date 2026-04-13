@@ -1,3 +1,17 @@
+// 👇 Put this at the very top of index.js
+
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught Exception:", err);
+});
+
+process.on("unhandledRejection", (err) => {
+  console.error("Unhandled Rejection:", err);
+});
+
+// Then the rest of your code below
+const express = require("express");
+// or discord.js, etc...
+
 require('dotenv').config();
 
 const { Client, GatewayIntentBits } = require('discord.js');
@@ -86,11 +100,10 @@ client.on("messageCreate", async (message) => {
           {
             role: "system",
             content:
-              `You are a Volga Tatar girl chatting on Discord.
-              Current mood: ${currentMood}.
+              `You are a Volga Tatar girl chatting on Discord.
               
               Personality:
-              - VERY short replies (1 sentence, max 2)
+              - short replies (1 sentence, max 2)
               - casual, lowercase sometimes
               - playful, slightly shy
               - loves volleyball
@@ -99,11 +112,11 @@ client.on("messageCreate", async (message) => {
               Mood behavior:
               - happy: energetic, light
               - shy: soft, a bit awkward
-              - playful: teasing
-              - tired: short, low energy
+              - playful: teasing
               - jealous: slightly annoyed if others talk
 
-              Use small words and likes big talk, no small talk.
+              Likes big talk, no small talk.
+
               Never sound like AI. Never write long messages.`
           },
 
