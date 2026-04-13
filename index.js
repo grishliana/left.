@@ -1,4 +1,4 @@
-// 🚨 crash protection (TOP)
+// 🚨 crash protection
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err);
 });
@@ -33,28 +33,47 @@ const groq = new OpenAI({
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-// 💘 OPTIONAL
+// 💖 CRUSH USER
 const CRUSH_ID = "123456789012345678";
 
-// 🧠 memory
+// 🧠 MEMORY
 let memory = [];
 
-// 👥 track active users
+// 👥 ACTIVE USERS
 let activeUsers = new Map();
 
-// ⏱️ cooldown
-let lastReplyTime = 0;
+// 🚨 BOT LIMIT SAFETY
+let botMessageTimestamps = [];
+const MAX_MESSAGES_PER_MIN = 3;
 
-// 🎭 mood system
+// 🧠 PERSONALITY SYSTEM
+let attention = 0.5;
+let fatigue = 0;
+let introversion = 0.85;
+
+let affection = {};
+
+function getAffection(userId) {
+  if (!affection[userId]) affection[userId] = 0;
+  return affection[userId];
+}
+
+// 🎭 MOOD SYSTEM
 const moods = ["happy", "shy", "playful", "tired", "jealous"];
 let currentMood = "shy";
 
 setInterval(() => {
   currentMood = moods[Math.floor(Math.random() * moods.length)];
-  console.log("Mood changed to:", currentMood);
 }, 120000);
 
-// 👥 helper
+// 🧠 ATTENTION DRIFT
+setInterval(() => {
+  attention += (Math.random() - 0.5) * 0.15;
+  attention += 0.03; // recovery when idle
+  attention = Math.max(0, Math.min(1, attention));
+}, 15000);
+
+// 👥 RANDOM USER HELPER
 function getRandomActiveUser() {
   const now = Date.now();
 
@@ -67,105 +86,91 @@ function getRandomActiveUser() {
   return recent[Math.floor(Math.random() * recent.length)];
 }
 
-// ✅ ready
+// 🧹 CLEAN BOT HISTORY
+function cleanBotHistory() {
+  const now = Date.now();
+  botMessageTimestamps = botMessageTimestamps.filter(
+    (t) => now - t < 60000
+  );
+}
+
+// ✅ READY
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-// ⚠️ logging
+// ⚠️ LOGGING
 client.on("error", console.error);
 client.on("warn", console.warn);
 
-// 💬 message handler
+// 💬 MESSAGE HANDLER
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
 
-    activeUsers.set(message.author.id, Date.now());
+    const now = Date.now();
+    const userId = message.author.id;
 
-    const isBusyChat = activeUsers.size >= 3;
+    activeUsers.set(userId, now);
 
-    let isReplyToBot = false;
-
-    if (message.reference) {
-      try {
-        const repliedMsg = await message.fetchReference();
-        if (repliedMsg.author.id === client.user.id) {
-          isReplyToBot = true;
-        }
-      } catch {}
+    // 💖 AFFECTION SYSTEM
+    if (userId === CRUSH_ID) {
+      affection[userId] = (affection[userId] || 0) + 0.03;
+      attention += 0.4;
+    } else {
+      affection[userId] = (affection[userId] || 0) + 0.005;
     }
 
+    // 💤 introvert social drain
+    attention -= introversion * 0.05;
+    fatigue += 0.01;
+
+    // 🧠 base detection
     const isMentioned =
       message.content.includes(`<@${client.user.id}>`) ||
       message.content.includes(`<@!${client.user.id}>`);
 
-    // 🔥 less strict reply logic
-    let shouldReply =
-      isMentioned || isReplyToBot || Math.random() < 0.07;
+    let shouldReply = isMentioned || Math.random() < 0.03;
 
-    // 🎯 random interaction
+    // 💖 affection boost
+    let affectionBoost = getAffection(userId) * 0.3;
+
+    // 🎯 attention-based activity
+    const activityChance =
+      0.02 + attention * 0.2 + affectionBoost;
+
+    // 💤 introvert silence chance
+    const introvertSilence = Math.random() < introversion * 0.6;
+
     if (!shouldReply) {
-      let chance = isBusyChat ? 0.18 : 0.10;
-
-      if (message.author.id === CRUSH_ID) {
-        chance = 0.30;
-      }
-
-      const randomUserId = getRandomActiveUser();
-
-      if (randomUserId && Math.random() < chance) {
-        shouldReply = true;
-      }
+      shouldReply = !introvertSilence && Math.random() < activityChance;
     }
 
-    // ⚡ dynamic cooldown
-    const now = Date.now();
-    const cooldown = isBusyChat
-      ? 2000 + Math.random() * 3000
-      : 4000 + Math.random() * 4000;
+    // 🚨 HARD LIMIT (prevents spam)
+    cleanBotHistory();
 
-    if (now - lastReplyTime < cooldown) {
-      shouldReply = false;
+    if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) {
+      return;
+    }
+
+    // ⏱️ cooldown (human-like)
+    const cooldown = 5000 + Math.random() * 15000;
+
+    const lastTime = botMessageTimestamps.at(-1) || 0;
+    if (now - lastTime < cooldown) {
+      return;
     }
 
     if (!shouldReply) return;
 
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
-    // 🧠 memory (bigger)
     memory.push({ role: "user", content: prompt });
     if (memory.length > 10) memory.shift();
 
-    // 🎲 random topic injection
-    const randomTopics = [
-      "im kinda bored ngl",
-      "do u like volleyball",
-      "lowkey tired today",
-      "what music do u listen to",
-      "i feel weird today idk why",
-      "do u ever just overthink everything",
-      "im hungry",
-      "school is annoying",
-      "why is everyone so quiet",
-    ];
+    await new Promise((r) => setTimeout(r, 600 + Math.random() * 1200));
 
-    let finalPrompt = prompt;
-
-    if (Math.random() < 0.25) {
-      finalPrompt += " | also say something random or change topic";
-    }
-
-    if (!prompt) {
-      finalPrompt =
-        randomTopics[Math.floor(Math.random() * randomTopics.length)];
-    }
-
-    await new Promise((res) =>
-      setTimeout(res, 600 + Math.random() * 1200)
-    );
-
-    // 🚀 GROQ CALL
+    // 🤖 GROQ CALL
     let response;
 
     try {
@@ -178,46 +183,30 @@ client.on("messageCreate", async (message) => {
             {
               role: "system",
               content: `
-You are a Volga Tatar girl chatting on Discord.
+You are a shy introverted Volga Tatar girl on Discord.
 
 Current mood: ${currentMood}
 
 Personality:
+- very introverted
 - short replies (1–2 sentences max)
-- casual, sometimes lowercase
-- slightly shy but playful
-- not always interested
-- sometimes changes topic randomly
+- sometimes awkward or quiet
+- prefers listening over talking
+- reacts more to a specific user she likes
 
-Behavior rules:
-- DO NOT repeat phrases
-- DO NOT sound like AI
-- vary wording every time
-- sometimes dry, sometimes energetic
-- sometimes say "lol", "idk", "maybe"
-- sometimes ask random questions
-- sometimes tease or act distracted
-- occasionally bring random topics
-
-Mood behavior:
-- happy: energetic
-- shy: soft
-- playful: teasing
-- jealous: passive-aggressive
-- tired: dry
-
-Extra realism:
-- occasionally change topic
-- occasionally be confusing
-
-Never write long messages.
-Never explain yourself.
+Behavior:
+- sometimes ignores messages
+- changes topic randomly
+- can be shy, soft, or playful
+- reacts more to crush user
+- never sounds like AI
+- never writes long messages
               `,
             },
             ...memory,
             {
               role: "user",
-              content: finalPrompt || "say something casual",
+              content: prompt || "say something casual",
             },
           ],
         }),
@@ -234,10 +223,10 @@ Never explain yourself.
     let reply =
       response?.choices?.[0]?.message?.content || "idk what to say lol";
 
-    // 🎭 occasional dry reply override
+    // 💬 occasional dry human response
     if (Math.random() < 0.15) {
-      const dryReplies = ["lol", "idk", "maybe", "hmm", "ok", "what", "eh"];
-      reply = dryReplies[Math.floor(Math.random() * dryReplies.length)];
+      const dry = ["lol", "idk", "maybe", "hmm", "ok", "what", "eh"];
+      reply = dry[Math.floor(Math.random() * dry.length)];
     }
 
     memory.push({ role: "assistant", content: reply });
@@ -253,12 +242,13 @@ Never explain yourself.
       await message.reply(reply);
     }
 
-    lastReplyTime = Date.now();
+    // 🚨 TRACK BOT MESSAGE
+    botMessageTimestamps.push(now);
 
   } catch (error) {
     console.error("❌ Message handler error:", error);
   }
 });
 
-// 🚀 login
+// 🚀 LOGIN
 client.login(process.env.DISCORD_TOKEN);
