@@ -59,7 +59,7 @@ function getRandomActiveUser() {
   const now = Date.now();
 
   const recent = [...activeUsers.entries()]
-    .filter(([_, time]) => now - time < 120000)
+    .filter(([_, time]) => now - time < 300000) // 5 min
     .map(([id]) => id);
 
   if (recent.length === 0) return null;
@@ -83,6 +83,8 @@ client.on("messageCreate", async (message) => {
 
     activeUsers.set(message.author.id, Date.now());
 
+    const isBusyChat = activeUsers.size >= 3;
+
     let isReplyToBot = false;
 
     if (message.reference) {
@@ -98,14 +100,16 @@ client.on("messageCreate", async (message) => {
       message.content.includes(`<@${client.user.id}>`) ||
       message.content.includes(`<@!${client.user.id}>`);
 
-    let shouldReply = isMentioned || isReplyToBot;
+    // 🔥 base reply logic (less strict)
+    let shouldReply =
+      isMentioned || isReplyToBot || Math.random() < 0.07;
 
-    // 🎯 rare random interaction
+    // 🎯 random interaction boost
     if (!shouldReply) {
-      let chance = 0.02;
+      let chance = isBusyChat ? 0.18 : 0.10;
 
       if (message.author.id === CRUSH_ID) {
-        chance = 0.10;
+        chance = 0.30;
       }
 
       const randomUserId = getRandomActiveUser();
@@ -115,9 +119,13 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // ⏱️ cooldown (30–60 sec)
+    // ⚡ NEW dynamic cooldown (2–8 sec)
     const now = Date.now();
-    if (now - lastReplyTime < 30000 + Math.random() * 30000) {
+    const cooldown = isBusyChat
+      ? 2000 + Math.random() * 3000   // 2–5 sec
+      : 4000 + Math.random() * 4000;  // 4–8 sec
+
+    if (now - lastReplyTime < cooldown) {
       shouldReply = false;
     }
 
@@ -129,10 +137,10 @@ client.on("messageCreate", async (message) => {
     if (memory.length > 6) memory.shift();
 
     await new Promise((res) =>
-      setTimeout(res, 1000 + Math.random() * 2000)
+      setTimeout(res, 600 + Math.random() * 1200)
     );
 
-    // 🚀 GROQ CALL (NOW WITH TIMEOUT PROTECTION)
+    // 🚀 GROQ CALL
     let response;
 
     try {
@@ -193,7 +201,7 @@ Never sound like AI. Never write long messages.
 
     const randomUserId = getRandomActiveUser();
 
-    if (randomUserId && Math.random() < 0.1) {
+    if (randomUserId && Math.random() < 0.15) {
       await message.channel.send(`<@${randomUserId}> ${reply}`);
     } else {
       await message.reply(reply);
