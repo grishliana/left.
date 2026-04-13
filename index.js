@@ -103,10 +103,10 @@ client.on("messageCreate", async (message) => {
 
     // 🎯 rare random interaction
     if (!shouldReply) {
-      let chance = 0.02; // VERY LOW
+      let chance = 0.02;
 
       if (message.author.id === CRUSH_ID) {
-        chance = 0.10; // slightly higher
+        chance = 0.10;
       }
 
       const randomUserId = getRandomActiveUser();
@@ -136,7 +136,7 @@ client.on("messageCreate", async (message) => {
     );
 
     const response = await groq.chat.completions.create({
-      model: "llama3-8b-8192",
+      model: "llama-3.3-70b-versatile", // ✅ UPDATED MODEL
       max_tokens: 60,
       temperature: 0.9,
       messages: [
@@ -189,7 +189,6 @@ Never sound like AI. Never write long messages.
       await message.reply(reply);
     }
 
-    // update cooldown
     lastReplyTime = Date.now();
 
   } catch (error) {
