@@ -18,7 +18,10 @@ if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
   process.exit(1);
 }
 
-// 🤖 Discord client
+// 🔒 ONLY ALLOWED CHANNEL
+const ALLOWED_CHANNEL_ID = "YOUR_CHANNEL_ID_HERE";
+
+// 🤖 CLIENT
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -27,26 +30,29 @@ const client = new Client({
   ],
 });
 
-// 🧠 Groq setup
+// 🧠 GROQ
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-// 💖 CRUSH USER
+// 💖 CRUSH
 const CRUSH_ID = "123456789012345678";
 
-// 🧠 MEMORY (expanded)
+// 🧠 MEMORY
 let memory = [];
 
-// 🧠 LAST REPLY (anti-repeat core fix)
+// 🔁 ANTI-REPEAT
 let lastReply = "";
-
-// 🧠 SIMPLE SIMILARITY TRACKING (anti-loop upgrade)
 let recentReplies = [];
 
 // 👥 ACTIVE USERS
 let activeUsers = new Map();
+
+// 🚨 RATE LIMIT
+let botMessageTimestamps = [];
+const MAX_MESSAGES_PER_MIN = 5;
+const WINDOW = 60000;
 
 // 🧠 RELATIONSHIP SYSTEM
 let relationships = {};
@@ -56,7 +62,6 @@ function getRelationship(userId) {
     relationships[userId] = {
       affection: 0,
       familiarity: 0,
-      lastInteraction: 0,
       tier: "stranger"
     };
   }
@@ -73,16 +78,7 @@ function updateTier(rel) {
   else rel.tier = "trusted";
 }
 
-// 🚨 BOT LIMIT SYSTEM
-let botMessageTimestamps = [];
-const MAX_MESSAGES_PER_MIN = 5;
-const WINDOW_MS = 60000;
-
-// 🧠 PERSONALITY
-let attention = 0.55;
-let introversion = 0.65;
-
-// 🎭 MOOD SYSTEM
+// 🎭 MOOD
 const moods = ["happy", "shy", "playful", "tired", "jealous"];
 let currentMood = "shy";
 
@@ -90,32 +86,50 @@ setInterval(() => {
   currentMood = moods[Math.floor(Math.random() * moods.length)];
 }, 120000);
 
-// 🧠 MEMORY DECAY
-setInterval(() => {
-  for (const id in relationships) {
-    relationships[id].familiarity *= 0.999;
-    relationships[id].affection *= 0.999;
-    updateTier(relationships[id]);
-  }
-}, 60000);
-
-// 🧹 CLEAN BOT HISTORY
+// 🧠 CLEAN RATE LIMIT
 function cleanBotHistory() {
   const now = Date.now();
   botMessageTimestamps = botMessageTimestamps.filter(
-    (t) => now - t < WINDOW_MS
+    (t) => now - t < WINDOW
   );
 }
 
-// 🧠 ANTI-REPEAT CHECK (REAL FIX)
+// 🧠 DISCORD STYLE TRANSFORM
+function makeDiscordLike(text) {
+  if (!text) return "idk";
+
+  let t = text.toLowerCase();
+
+  const swaps = [
+    ["i am", "im"],
+    ["you are", "ur"],
+    ["are you", "r u"],
+    ["what is", "what's"],
+    ["do not", "dont"],
+    ["cannot", "cant"],
+    ["because", "bc"],
+  ];
+
+  for (const [a, b] of swaps) {
+    t = t.replaceAll(a, b);
+  }
+
+  const endings = [" lol", " idk", " tbh", " 😭", " haha", "..."];
+  if (Math.random() < 0.4) {
+    t += endings[Math.floor(Math.random() * endings.length)];
+  }
+
+  return t.replace(/\.$/, "").trim();
+}
+
+// 🧠 ANTI-REPEAT CHECK
 function isRepeating(reply) {
   const cleaned = reply.toLowerCase().trim();
 
   if (cleaned === lastReply.toLowerCase().trim()) return true;
 
-  // block spam phrases loop
-  const spamPatterns = ["idk", "lol", "maybe", "hmm", "ok"];
-  if (spamPatterns.includes(cleaned)) {
+  const spam = ["idk", "lol", "maybe", "hmm", "ok"];
+  if (spam.includes(cleaned)) {
     if (recentReplies.slice(-3).every(r => r === cleaned)) {
       return true;
     }
@@ -129,7 +143,7 @@ function getRandomActiveUser() {
   const now = Date.now();
 
   const recent = [...activeUsers.entries()]
-    .filter(([_, time]) => now - time < 300000)
+    .filter(([_, t]) => now - t < 300000)
     .map(([id]) => id);
 
   return recent.length
@@ -137,41 +151,34 @@ function getRandomActiveUser() {
     : null;
 }
 
-// 🗣️ IDLE CHAT
+// 🗣️ IDLE CHAT (SAFE CHANNEL)
 let lastBotSpeakTime = Date.now();
 
 setInterval(async () => {
   const now = Date.now();
-
-  if (now - lastBotSpeakTime < 90000 + Math.random() * 90000) return;
+  if (now - lastBotSpeakTime < 120000) return;
   if (activeUsers.size === 0) return;
 
-  const users = [...activeUsers.keys()];
-  const targetId = users[Math.floor(Math.random() * users.length)];
-
-  const rel = getRelationship(targetId);
-  if (rel.familiarity < 0.2 && Math.random() < 0.7) return;
+  const channel = await client.channels.fetch(ALLOWED_CHANNEL_ID).catch(() => null);
+  if (!channel) return;
 
   const prompts = [
-    "what are you all doing",
-    "this server is kinda quiet",
-    "i'm bored lol",
-    "anyone here",
-    "random question... what's your favorite song?"
+    "what are u all doing",
+    "this server is kinda quiet ngl",
+    "im bored lol",
+    "anyone here?",
+    "random q… what are u listening to?"
   ];
 
   const prompt = prompts[Math.floor(Math.random() * prompts.length)];
 
   try {
-    const channel = client.channels.cache.find(c => c.isTextBased?.());
-    if (!channel) return;
-
     await channel.send(prompt);
     lastBotSpeakTime = now;
   } catch (e) {
     console.error(e);
   }
-}, 45000);
+}, 60000);
 
 // ✅ READY
 client.once("ready", () => {
@@ -182,6 +189,7 @@ client.once("ready", () => {
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
+    if (message.channel.id !== ALLOWED_CHANNEL_ID) return;
 
     const now = Date.now();
     const userId = message.author.id;
@@ -193,7 +201,6 @@ client.on("messageCreate", async (message) => {
     // 💖 relationship growth
     rel.affection += userId === CRUSH_ID ? 0.03 : 0.005;
     rel.familiarity += 0.01;
-    rel.lastInteraction = now;
 
     updateTier(rel);
 
@@ -203,41 +210,31 @@ client.on("messageCreate", async (message) => {
 
     let shouldReply = isMentioned || Math.random() < 0.08;
 
-    const affectionBoost = rel.affection * 0.5;
-
     const tierBoost =
       rel.tier === "trusted" ? 0.15 :
       rel.tier === "close_friend" ? 0.1 :
       rel.tier === "friend" ? 0.05 :
       rel.tier === "acquaintance" ? 0.02 : 0;
 
-    const activityChance =
-      0.05 + attention * 0.3 + affectionBoost + tierBoost;
-
-    const introvertSilence = Math.random() < introversion * 0.4;
+    const activityChance = 0.05 + tierBoost;
 
     if (!shouldReply) {
-      shouldReply = !introvertSilence && Math.random() < activityChance;
+      shouldReply = Math.random() < activityChance;
     }
 
     // 🚨 LIMIT CHECK
     cleanBotHistory();
     if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) return;
 
-    const cooldown = 4000 + Math.random() * 12000;
     const lastTime = botMessageTimestamps.at(-1) || 0;
-
-    if (now - lastTime < cooldown) return;
+    if (now - lastTime < 5000 + Math.random() * 8000) return;
     if (!shouldReply) return;
 
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
     memory.push({ role: "user", content: prompt });
-    if (memory.length > 25) memory.shift(); // 🔥 FIX: bigger memory
+    if (memory.length > 25) memory.shift();
 
-    await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
-
-    // 🤖 AI CALL
     let response;
 
     try {
@@ -250,16 +247,15 @@ client.on("messageCreate", async (message) => {
             {
               role: "system",
               content: `
-You are a shy introverted Discord girl.
+You are a shy Discord girl.
 
-Mood: ${currentMood}
-
-IMPORTANT:
-- NEVER repeat phrases
-- NEVER use only "lol", "idk", "maybe" repeatedly
-- vary wording every time
-- avoid identical responses
-- sound human, not AI
+RULES:
+- ONLY 1 sentence
+- sound like real Discord user
+- lowercase typing
+- slang: im, idk, tbh, bc, lol
+- sometimes dry or emotional
+- NEVER sound like AI
               `,
             },
             ...memory,
@@ -269,30 +265,25 @@ IMPORTANT:
             },
           ],
         }),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error("timeout")), 8000)
+        new Promise((_, r) =>
+          setTimeout(() => r(new Error("timeout")), 8000)
         ),
       ]);
     } catch {
-      return message.reply("i'm kinda slow rn...");
+      return message.reply("im kinda slow rn...");
     }
 
-    let reply = response?.choices?.[0]?.message?.content || "idk";
+    let reply = response?.choices?.[0]?.message?.content || "hm...";
 
-    // 💀 FIX: anti-repeat enforcement
-    if (isRepeating(reply)) {
-      reply = "hm...";
-    }
+    // 🔥 FINAL FIX PIPELINE
+    reply = reply.toLowerCase().split(/[.!?]/)[0]; // FORCE 1 SENTENCE
+    reply = makeDiscordLike(reply);
+
+    if (isRepeating(reply)) reply = "hm...";
 
     lastReply = reply;
-    recentReplies.push(reply.toLowerCase().trim());
+    recentReplies.push(reply);
     if (recentReplies.length > 10) recentReplies.shift();
-
-    if (Math.random() < 0.15) {
-      const users = [...activeUsers.keys()];
-      const randomUser = users[Math.floor(Math.random() * users.length)];
-      return message.channel.send(`<@${randomUser}> ${reply}`);
-    }
 
     await message.reply(reply);
 
