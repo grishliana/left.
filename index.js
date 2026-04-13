@@ -36,8 +36,14 @@ const groq = new OpenAI({
 // 💖 CRUSH USER
 const CRUSH_ID = "123456789012345678";
 
-// 🧠 MEMORY
+// 🧠 MEMORY (expanded)
 let memory = [];
+
+// 🧠 LAST REPLY (anti-repeat core fix)
+let lastReply = "";
+
+// 🧠 SIMPLE SIMILARITY TRACKING (anti-loop upgrade)
+let recentReplies = [];
 
 // 👥 ACTIVE USERS
 let activeUsers = new Map();
@@ -67,14 +73,13 @@ function updateTier(rel) {
   else rel.tier = "trusted";
 }
 
-// 🚨 BOT LIMIT SYSTEM (5/min strict)
+// 🚨 BOT LIMIT SYSTEM
 let botMessageTimestamps = [];
 const MAX_MESSAGES_PER_MIN = 5;
 const WINDOW_MS = 60000;
 
 // 🧠 PERSONALITY
 let attention = 0.55;
-let fatigue = 0;
 let introversion = 0.65;
 
 // 🎭 MOOD SYSTEM
@@ -85,14 +90,7 @@ setInterval(() => {
   currentMood = moods[Math.floor(Math.random() * moods.length)];
 }, 120000);
 
-// 🧠 ATTENTION DRIFT
-setInterval(() => {
-  attention += (Math.random() - 0.5) * 0.15;
-  attention += 0.03;
-  attention = Math.max(0, Math.min(1, attention));
-}, 15000);
-
-// 🧠 MEMORY DECAY + TIER UPDATE
+// 🧠 MEMORY DECAY
 setInterval(() => {
   for (const id in relationships) {
     relationships[id].familiarity *= 0.999;
@@ -101,7 +99,32 @@ setInterval(() => {
   }
 }, 60000);
 
-// 👥 RANDOM ACTIVE USER
+// 🧹 CLEAN BOT HISTORY
+function cleanBotHistory() {
+  const now = Date.now();
+  botMessageTimestamps = botMessageTimestamps.filter(
+    (t) => now - t < WINDOW_MS
+  );
+}
+
+// 🧠 ANTI-REPEAT CHECK (REAL FIX)
+function isRepeating(reply) {
+  const cleaned = reply.toLowerCase().trim();
+
+  if (cleaned === lastReply.toLowerCase().trim()) return true;
+
+  // block spam phrases loop
+  const spamPatterns = ["idk", "lol", "maybe", "hmm", "ok"];
+  if (spamPatterns.includes(cleaned)) {
+    if (recentReplies.slice(-3).every(r => r === cleaned)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+// 👥 ACTIVE USER PICKER
 function getRandomActiveUser() {
   const now = Date.now();
 
@@ -109,34 +132,24 @@ function getRandomActiveUser() {
     .filter(([_, time]) => now - time < 300000)
     .map(([id]) => id);
 
-  if (recent.length === 0) return null;
-
-  return recent[Math.floor(Math.random() * recent.length)];
+  return recent.length
+    ? recent[Math.floor(Math.random() * recent.length)]
+    : null;
 }
 
-// 🧹 CLEAN BOT HISTORY
-function cleanBotHistory() {
-  const now = Date.now();
-
-  botMessageTimestamps = botMessageTimestamps.filter(
-    (t) => now - t < WINDOW_MS
-  );
-}
-
-// 🗣️ IDLE CONVERSATION STARTER
+// 🗣️ IDLE CHAT
 let lastBotSpeakTime = Date.now();
 
 setInterval(async () => {
   const now = Date.now();
-  if (now - lastBotSpeakTime < 90000 + Math.random() * 90000) return;
 
+  if (now - lastBotSpeakTime < 90000 + Math.random() * 90000) return;
   if (activeUsers.size === 0) return;
 
   const users = [...activeUsers.keys()];
   const targetId = users[Math.floor(Math.random() * users.length)];
 
   const rel = getRelationship(targetId);
-
   if (rel.familiarity < 0.2 && Math.random() < 0.7) return;
 
   const prompts = [
@@ -156,7 +169,7 @@ setInterval(async () => {
     await channel.send(prompt);
     lastBotSpeakTime = now;
   } catch (e) {
-    console.error("idle convo error:", e);
+    console.error(e);
   }
 }, 45000);
 
@@ -184,27 +197,19 @@ client.on("messageCreate", async (message) => {
 
     updateTier(rel);
 
-    // 🧠 attention system
-    if (userId === CRUSH_ID) attention += 0.4;
-    attention -= introversion * 0.05;
-    fatigue += 0.01;
-
     const isMentioned =
       message.content.includes(`<@${client.user.id}>`) ||
       message.content.includes(`<@!${client.user.id}>`);
 
     let shouldReply = isMentioned || Math.random() < 0.08;
 
-    let affectionBoost = rel.affection * 0.5;
+    const affectionBoost = rel.affection * 0.5;
 
-    let tierBoost = 0;
-    switch (rel.tier) {
-      case "stranger": tierBoost = 0; break;
-      case "acquaintance": tierBoost = 0.02; break;
-      case "friend": tierBoost = 0.05; break;
-      case "close_friend": tierBoost = 0.1; break;
-      case "trusted": tierBoost = 0.15; break;
-    }
+    const tierBoost =
+      rel.tier === "trusted" ? 0.15 :
+      rel.tier === "close_friend" ? 0.1 :
+      rel.tier === "friend" ? 0.05 :
+      rel.tier === "acquaintance" ? 0.02 : 0;
 
     const activityChance =
       0.05 + attention * 0.3 + affectionBoost + tierBoost;
@@ -215,12 +220,9 @@ client.on("messageCreate", async (message) => {
       shouldReply = !introvertSilence && Math.random() < activityChance;
     }
 
-    // 🚨 5 MESSAGES PER MIN LIMIT
+    // 🚨 LIMIT CHECK
     cleanBotHistory();
-
-    if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) {
-      return;
-    }
+    if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) return;
 
     const cooldown = 4000 + Math.random() * 12000;
     const lastTime = botMessageTimestamps.at(-1) || 0;
@@ -231,7 +233,7 @@ client.on("messageCreate", async (message) => {
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
     memory.push({ role: "user", content: prompt });
-    if (memory.length > 10) memory.shift();
+    if (memory.length > 25) memory.shift(); // 🔥 FIX: bigger memory
 
     await new Promise(r => setTimeout(r, 500 + Math.random() * 1000));
 
@@ -252,17 +254,12 @@ You are a shy introverted Discord girl.
 
 Mood: ${currentMood}
 
-Relationship tiers:
-- stranger: distant, minimal replies
-- acquaintance: polite
-- friend: warm
-- close_friend: talkative
-- trusted: very comfortable
-
-Always:
-- short replies
-- natural tone
-- never sound like AI
+IMPORTANT:
+- NEVER repeat phrases
+- NEVER use only "lol", "idk", "maybe" repeatedly
+- vary wording every time
+- avoid identical responses
+- sound human, not AI
               `,
             },
             ...memory,
@@ -276,21 +273,20 @@ Always:
           setTimeout(() => reject(new Error("timeout")), 8000)
         ),
       ]);
-    } catch (err) {
+    } catch {
       return message.reply("i'm kinda slow rn...");
     }
 
     let reply = response?.choices?.[0]?.message?.content || "idk";
 
-    if (Math.random() < 0.15) {
-      const dry = ["lol", "idk", "maybe", "hmm", "ok"];
-      reply = dry[Math.floor(Math.random() * dry.length)];
+    // 💀 FIX: anti-repeat enforcement
+    if (isRepeating(reply)) {
+      reply = "hm...";
     }
 
-    memory.push({ role: "assistant", content: reply });
-    if (memory.length > 10) memory.shift();
-
-    reply = reply.slice(0, 2000);
+    lastReply = reply;
+    recentReplies.push(reply.toLowerCase().trim());
+    if (recentReplies.length > 10) recentReplies.shift();
 
     if (Math.random() < 0.15) {
       const users = [...activeUsers.keys()];
