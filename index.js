@@ -59,7 +59,7 @@ function getRandomActiveUser() {
   const now = Date.now();
 
   const recent = [...activeUsers.entries()]
-    .filter(([_, time]) => now - time < 300000) // 5 min
+    .filter(([_, time]) => now - time < 300000)
     .map(([id]) => id);
 
   if (recent.length === 0) return null;
@@ -100,11 +100,11 @@ client.on("messageCreate", async (message) => {
       message.content.includes(`<@${client.user.id}>`) ||
       message.content.includes(`<@!${client.user.id}>`);
 
-    // 🔥 base reply logic (less strict)
+    // 🔥 less strict reply logic
     let shouldReply =
       isMentioned || isReplyToBot || Math.random() < 0.07;
 
-    // 🎯 random interaction boost
+    // 🎯 random interaction
     if (!shouldReply) {
       let chance = isBusyChat ? 0.18 : 0.10;
 
@@ -119,11 +119,11 @@ client.on("messageCreate", async (message) => {
       }
     }
 
-    // ⚡ NEW dynamic cooldown (2–8 sec)
+    // ⚡ dynamic cooldown
     const now = Date.now();
     const cooldown = isBusyChat
-      ? 2000 + Math.random() * 3000   // 2–5 sec
-      : 4000 + Math.random() * 4000;  // 4–8 sec
+      ? 2000 + Math.random() * 3000
+      : 4000 + Math.random() * 4000;
 
     if (now - lastReplyTime < cooldown) {
       shouldReply = false;
@@ -133,8 +133,33 @@ client.on("messageCreate", async (message) => {
 
     const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
+    // 🧠 memory (bigger)
     memory.push({ role: "user", content: prompt });
-    if (memory.length > 6) memory.shift();
+    if (memory.length > 10) memory.shift();
+
+    // 🎲 random topic injection
+    const randomTopics = [
+      "im kinda bored ngl",
+      "do u like volleyball",
+      "lowkey tired today",
+      "what music do u listen to",
+      "i feel weird today idk why",
+      "do u ever just overthink everything",
+      "im hungry",
+      "school is annoying",
+      "why is everyone so quiet",
+    ];
+
+    let finalPrompt = prompt;
+
+    if (Math.random() < 0.25) {
+      finalPrompt += " | also say something random or change topic";
+    }
+
+    if (!prompt) {
+      finalPrompt =
+        randomTopics[Math.floor(Math.random() * randomTopics.length)];
+    }
 
     await new Promise((res) =>
       setTimeout(res, 600 + Math.random() * 1200)
@@ -148,7 +173,7 @@ client.on("messageCreate", async (message) => {
         groq.chat.completions.create({
           model: "llama-3.3-70b-versatile",
           max_tokens: 60,
-          temperature: 0.9,
+          temperature: 1,
           messages: [
             {
               role: "system",
@@ -159,25 +184,40 @@ Current mood: ${currentMood}
 
 Personality:
 - short replies (1–2 sentences max)
-- casual, lowercase sometimes
-- playful, slightly shy
-- loves volleyball
-- has a crush on one boy
+- casual, sometimes lowercase
+- slightly shy but playful
+- not always interested
+- sometimes changes topic randomly
+
+Behavior rules:
+- DO NOT repeat phrases
+- DO NOT sound like AI
+- vary wording every time
+- sometimes dry, sometimes energetic
+- sometimes say "lol", "idk", "maybe"
+- sometimes ask random questions
+- sometimes tease or act distracted
+- occasionally bring random topics
 
 Mood behavior:
 - happy: energetic
-- shy: soft, awkward
+- shy: soft
 - playful: teasing
-- jealous: slightly annoyed
-- tired: dry, low energy
+- jealous: passive-aggressive
+- tired: dry
 
-Never sound like AI. Never write long messages.
+Extra realism:
+- occasionally change topic
+- occasionally be confusing
+
+Never write long messages.
+Never explain yourself.
               `,
             },
             ...memory,
             {
               role: "user",
-              content: prompt || "say something casual",
+              content: finalPrompt || "say something casual",
             },
           ],
         }),
@@ -194,8 +234,14 @@ Never sound like AI. Never write long messages.
     let reply =
       response?.choices?.[0]?.message?.content || "idk what to say lol";
 
+    // 🎭 occasional dry reply override
+    if (Math.random() < 0.15) {
+      const dryReplies = ["lol", "idk", "maybe", "hmm", "ok", "what", "eh"];
+      reply = dryReplies[Math.floor(Math.random() * dryReplies.length)];
+    }
+
     memory.push({ role: "assistant", content: reply });
-    if (memory.length > 6) memory.shift();
+    if (memory.length > 10) memory.shift();
 
     reply = reply.slice(0, 2000);
 
