@@ -1,4 +1,6 @@
-// 🚨 crash protection
+// =========================
+// 🚨 CRASH PROTECTION
+// =========================
 process.on("uncaughtException", (err) => {
   console.error("Uncaught Exception:", err);
 });
@@ -7,21 +9,47 @@ process.on("unhandledRejection", (err) => {
   console.error("Unhandled Rejection:", err);
 });
 
+// =========================
+// 🌐 EXPRESS (RENDER FIX)
+// =========================
+const express = require("express");
+const app = express();
+
+const PORT = process.env.PORT || 3000;
+
+app.get("/", (req, res) => {
+  res.send("Bot is alive ✅");
+});
+
+app.listen(PORT, () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
+// =========================
+// ENV
+// =========================
 require("dotenv").config();
 
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
-// 🔐 ENV CHECK
+// =========================
+// ENV CHECK
+// =========================
 if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
   console.error("❌ Missing DISCORD_TOKEN or GROQ_API_KEY");
   process.exit(1);
 }
 
-// 🔒 ONLY ALLOWED CHANNEL
+// =========================
+// CONFIG
+// =========================
 const ALLOWED_CHANNEL_ID = "YOUR_CHANNEL_ID_HERE";
+const CRUSH_ID = "123456789012345678";
 
-// 🤖 CLIENT
+// =========================
+// DISCORD CLIENT
+// =========================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -30,31 +58,29 @@ const client = new Client({
   ],
 });
 
-// 🧠 GROQ
+// =========================
+// GROQ CLIENT
+// =========================
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-// 💖 CRUSH (kept but NOT emotional)
-const CRUSH_ID = "123456789012345678";
-
-// 🧠 MEMORY
+// =========================
+// MEMORY / STATE
+// =========================
 let memory = [];
-
-// 🔁 ANTI-REPEAT
 let lastReply = "";
 let recentReplies = [];
-
-// 👥 ACTIVE USERS
 let activeUsers = new Map();
-
-// 🚨 RATE LIMIT
 let botMessageTimestamps = [];
+
 const MAX_MESSAGES_PER_MIN = 5;
 const WINDOW = 60000;
 
-// 🧠 RELATIONSHIP SYSTEM (NON-EMOTIONAL)
+// =========================
+// RELATIONSHIPS SYSTEM
+// =========================
 let relationships = {};
 
 function getRelationship(userId) {
@@ -62,7 +88,7 @@ function getRelationship(userId) {
     relationships[userId] = {
       affection: 0,
       familiarity: 0,
-      tier: "stranger"
+      tier: "stranger",
     };
   }
   return relationships[userId];
@@ -78,7 +104,9 @@ function updateTier(rel) {
   else rel.tier = "trusted";
 }
 
-// 🧹 CLEAN RATE LIMIT
+// =========================
+// UTIL FUNCTIONS
+// =========================
 function cleanBotHistory() {
   const now = Date.now();
   botMessageTimestamps = botMessageTimestamps.filter(
@@ -86,7 +114,6 @@ function cleanBotHistory() {
   );
 }
 
-// 🧠 DISCORD STYLE (NO EMOTION)
 function makeDiscordLike(text) {
   if (!text) return "idk";
 
@@ -114,7 +141,6 @@ function makeDiscordLike(text) {
   return t.replace(/\.$/, "").trim();
 }
 
-// 🧠 ANTI-REPEAT
 function isRepeating(reply) {
   const cleaned = reply.toLowerCase().trim();
 
@@ -122,7 +148,7 @@ function isRepeating(reply) {
 
   const spam = ["idk", "lol", "maybe", "hmm", "ok"];
   if (spam.includes(cleaned)) {
-    if (recentReplies.slice(-3).every(r => r === cleaned)) {
+    if (recentReplies.slice(-3).every((r) => r === cleaned)) {
       return true;
     }
   }
@@ -130,20 +156,16 @@ function isRepeating(reply) {
   return false;
 }
 
-// 👥 ACTIVE USER PICKER
-function getRandomActiveUser() {
-  const now = Date.now();
+// =========================
+// READY EVENT
+// =========================
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+});
 
-  const recent = [...activeUsers.entries()]
-    .filter(([_, t]) => now - t < 300000)
-    .map(([id]) => id);
-
-  return recent.length
-    ? recent[Math.floor(Math.random() * recent.length)]
-    : null;
-}
-
-// 🗣️ IDLE CHAT (NEUTRAL)
+// =========================
+// IDLE CHAT
+// =========================
 let lastBotSpeakTime = Date.now();
 
 setInterval(async () => {
@@ -151,7 +173,10 @@ setInterval(async () => {
   if (now - lastBotSpeakTime < 120000) return;
   if (activeUsers.size === 0) return;
 
-  const channel = await client.channels.fetch(ALLOWED_CHANNEL_ID).catch(() => null);
+  const channel = await client.channels
+    .fetch(ALLOWED_CHANNEL_ID)
+    .catch(() => null);
+
   if (!channel) return;
 
   const prompts = [
@@ -159,7 +184,7 @@ setInterval(async () => {
     "this chat is quiet",
     "anyone here?",
     "what are you all up to",
-    "random question: what are u working on?"
+    "random question: what are u working on?",
   ];
 
   const prompt = prompts[Math.floor(Math.random() * prompts.length)];
@@ -172,12 +197,9 @@ setInterval(async () => {
   }
 }, 60000);
 
-// ✅ READY
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-});
-
-// 💬 MESSAGE HANDLER
+// =========================
+// MESSAGE HANDLER
+// =========================
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
@@ -190,7 +212,7 @@ client.on("messageCreate", async (message) => {
 
     const rel = getRelationship(userId);
 
-    rel.affection += (userId === CRUSH_ID ? 0.03 : 0.005);
+    rel.affection += userId === CRUSH_ID ? 0.03 : 0.005;
     rel.familiarity += 0.01;
 
     updateTier(rel);
@@ -250,7 +272,6 @@ RULES:
 
     let reply = response?.choices?.[0]?.message?.content || "hm...";
 
-    // FORCE 1 SENTENCE + CLEAN STYLE
     reply = reply.toLowerCase().split(/[.!?]/)[0];
     reply = makeDiscordLike(reply);
 
@@ -263,11 +284,12 @@ RULES:
     await message.reply(reply);
 
     botMessageTimestamps.push(now);
-
   } catch (err) {
     console.error(err);
   }
 });
 
-// 🚀 LOGIN
+// =========================
+// LOGIN
+// =========================
 client.login(process.env.DISCORD_TOKEN);
