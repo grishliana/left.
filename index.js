@@ -36,7 +36,7 @@ const groq = new OpenAI({
   baseURL: "https://api.groq.com/openai/v1",
 });
 
-// 💖 CRUSH
+// 💖 CRUSH (kept but NOT emotional)
 const CRUSH_ID = "123456789012345678";
 
 // 🧠 MEMORY
@@ -54,7 +54,7 @@ let botMessageTimestamps = [];
 const MAX_MESSAGES_PER_MIN = 5;
 const WINDOW = 60000;
 
-// 🧠 RELATIONSHIP SYSTEM
+// 🧠 RELATIONSHIP SYSTEM (NON-EMOTIONAL)
 let relationships = {};
 
 function getRelationship(userId) {
@@ -78,15 +78,7 @@ function updateTier(rel) {
   else rel.tier = "trusted";
 }
 
-// 🎭 MOOD
-const moods = ["happy", "shy", "playful", "tired", "jealous"];
-let currentMood = "shy";
-
-setInterval(() => {
-  currentMood = moods[Math.floor(Math.random() * moods.length)];
-}, 120000);
-
-// 🧠 CLEAN RATE LIMIT
+// 🧹 CLEAN RATE LIMIT
 function cleanBotHistory() {
   const now = Date.now();
   botMessageTimestamps = botMessageTimestamps.filter(
@@ -94,7 +86,7 @@ function cleanBotHistory() {
   );
 }
 
-// 🧠 DISCORD STYLE TRANSFORM
+// 🧠 DISCORD STYLE (NO EMOTION)
 function makeDiscordLike(text) {
   if (!text) return "idk";
 
@@ -114,15 +106,15 @@ function makeDiscordLike(text) {
     t = t.replaceAll(a, b);
   }
 
-  const endings = [" lol", " idk", " tbh", " 😭", " haha", "..."];
-  if (Math.random() < 0.4) {
+  const endings = [" lol", " idk", " tbh"];
+  if (Math.random() < 0.3) {
     t += endings[Math.floor(Math.random() * endings.length)];
   }
 
   return t.replace(/\.$/, "").trim();
 }
 
-// 🧠 ANTI-REPEAT CHECK
+// 🧠 ANTI-REPEAT
 function isRepeating(reply) {
   const cleaned = reply.toLowerCase().trim();
 
@@ -151,7 +143,7 @@ function getRandomActiveUser() {
     : null;
 }
 
-// 🗣️ IDLE CHAT (SAFE CHANNEL)
+// 🗣️ IDLE CHAT (NEUTRAL)
 let lastBotSpeakTime = Date.now();
 
 setInterval(async () => {
@@ -163,11 +155,11 @@ setInterval(async () => {
   if (!channel) return;
 
   const prompts = [
-    "what are u all doing",
-    "this server is kinda quiet ngl",
-    "im bored lol",
+    "what are u doing",
+    "this chat is quiet",
     "anyone here?",
-    "random q… what are u listening to?"
+    "what are you all up to",
+    "random question: what are u working on?"
   ];
 
   const prompt = prompts[Math.floor(Math.random() * prompts.length)];
@@ -198,31 +190,15 @@ client.on("messageCreate", async (message) => {
 
     const rel = getRelationship(userId);
 
-    // 💖 relationship growth
-    rel.affection += userId === CRUSH_ID ? 0.03 : 0.005;
+    rel.affection += (userId === CRUSH_ID ? 0.03 : 0.005);
     rel.familiarity += 0.01;
 
     updateTier(rel);
 
-    const isMentioned =
+    const shouldReply =
       message.content.includes(`<@${client.user.id}>`) ||
-      message.content.includes(`<@!${client.user.id}>`);
+      Math.random() < 0.08;
 
-    let shouldReply = isMentioned || Math.random() < 0.08;
-
-    const tierBoost =
-      rel.tier === "trusted" ? 0.15 :
-      rel.tier === "close_friend" ? 0.1 :
-      rel.tier === "friend" ? 0.05 :
-      rel.tier === "acquaintance" ? 0.02 : 0;
-
-    const activityChance = 0.05 + tierBoost;
-
-    if (!shouldReply) {
-      shouldReply = Math.random() < activityChance;
-    }
-
-    // 🚨 LIMIT CHECK
     cleanBotHistory();
     if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) return;
 
@@ -247,15 +223,14 @@ client.on("messageCreate", async (message) => {
             {
               role: "system",
               content: `
-You are a shy Discord girl.
+You are a Discord user.
 
 RULES:
-- ONLY 1 sentence
-- sound like real Discord user
-- lowercase typing
-- slang: im, idk, tbh, bc, lol
-- sometimes dry or emotional
-- NEVER sound like AI
+- 1 sentence only
+- no emotions, no feelings, no expressions
+- no storytelling
+- casual Discord slang allowed
+- sound natural and short
               `,
             },
             ...memory,
@@ -275,8 +250,8 @@ RULES:
 
     let reply = response?.choices?.[0]?.message?.content || "hm...";
 
-    // 🔥 FINAL FIX PIPELINE
-    reply = reply.toLowerCase().split(/[.!?]/)[0]; // FORCE 1 SENTENCE
+    // FORCE 1 SENTENCE + CLEAN STYLE
+    reply = reply.toLowerCase().split(/[.!?]/)[0];
     reply = makeDiscordLike(reply);
 
     if (isRepeating(reply)) reply = "hm...";
