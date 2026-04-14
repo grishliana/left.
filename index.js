@@ -9,6 +9,7 @@ process.on("unhandledRejection", console.error);
 // =========================
 require("dotenv").config();
 
+const express = require("express");
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
@@ -18,7 +19,31 @@ if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
 }
 
 // =========================
-// CLIENT
+// EXPRESS SERVER (RENDER FIX)
+// =========================
+const app = express();
+
+app.get("/", (req, res) => {
+  res.send("🤖 Aliya bot is running");
+});
+
+app.get("/status", (req, res) => {
+  res.json({
+    status: "online",
+    uptime: process.uptime(),
+    usersTracked: Object.keys(users).length,
+    queueSize: [...queues.values()].reduce((a, q) => a + q.length, 0)
+  });
+});
+
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🌐 Web server running on port ${PORT}`);
+});
+
+// =========================
+// DISCORD CLIENT
 // =========================
 const client = new Client({
   intents: [
@@ -65,8 +90,6 @@ function getUser(id) {
       mood: "neutral",
       lastSeen: Date.now(),
       attentionScore: 0,
-
-      // ❤️ relationship system
       relationship: "stranger",
       affection: 0,
       trust: 0,
@@ -180,7 +203,7 @@ function isUnsafe(text) {
 }
 
 // =========================
-// BUFFER / ACTIVITY
+// BUFFER ACTIVITY
 // =========================
 function activityScore(buffer) {
   let score = 0;
@@ -197,36 +220,22 @@ function activityScore(buffer) {
 function getPersona(user) {
   const mod = relationshipModifiers(user);
 
-  let tone =
-    globalPersonality < 0.3 ? "very reserved" :
-    globalPersonality < 0.6 ? "calm balanced" :
-    "warm expressive";
-
-  if (user.mood === "cold") tone += ", distant";
-  if (user.mood === "warm") tone += ", friendly";
-
   return `
 You are Aliya.
 
-CORE:
-- realistic Discord user
-- emotional memory
-- gradual bonding
-- natural texting
-
-STATE:
-Tone: ${tone}
+Tone: ${globalPersonality < 0.6 ? "calm" : "warm expressive"}
 Relationship: ${user.relationship}
 Warmth: ${mod.warmth}
 
 RULES:
 - 1–2 sentences max
-- no AI behavior
+- realistic Discord user
+- emotional memory
 `;
 }
 
 // =========================
-// QUEUE PROCESSOR (FIXED SYSTEM)
+// QUEUE PROCESSOR
 // =========================
 async function processQueue(channelId) {
   if (processing.get(channelId)) return;
@@ -235,47 +244,19 @@ async function processQueue(channelId) {
   const queue = getQueue(channelId);
 
   while (queue.length > 0) {
-    const { message, user, activity } = queue.shift();
-
-    const last = lastReply.get(user.id) || 0;
-    const wait = Math.max(0, 3500 - (Date.now() - last));
-
-    if (wait > 0) {
-      await new Promise(r => setTimeout(r, wait));
-    }
-
-    await new Promise(r =>
-      setTimeout(r, delay(message.content, user))
-    );
-
-    await message.channel.sendTyping();
+    const { message, user } = queue.shift();
 
     const buffer = getBuffer(channelId);
-    const mod = relationshipModifiers(user);
 
     const res = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
       max_tokens: 120,
       temperature: 1.1,
       messages: [
-        {
-          role: "system",
-          content: getPersona(user)
-        },
+        { role: "system", content: getPersona(user) },
         {
           role: "user",
-          content: `
-Friendship: ${user.friendship}
-Mood: ${user.mood}
-Relationship: ${user.relationship}
-Warmth: ${mod.warmth}
-Global personality: ${globalPersonality.toFixed(2)}
-
-Chat:
-${buffer.map(m => `${m.user}: ${m.content}`).join("\n")}
-
-Respond naturally like a Discord user.
-`
+          content: buffer.map(m => `${m.user}: ${m.content}`).join("\n")
         }
       ]
     });
@@ -315,17 +296,15 @@ client.on("messageCreate", async (message) => {
 
     if (buffer.length > 12) buffer.shift();
 
-    const activity = activityScore(buffer);
-
-    if (Math.random() < 0.1) return; // slight human ignore behavior
+    if (Math.random() < 0.1) return;
 
     const queue = getQueue(message.channel.id);
-    queue.push({ message, user, activity });
+    queue.push({ message, user });
 
     processQueue(message.channel.id);
 
   } catch (err) {
-    console.error("🔥 ERROR:", err);
+    console.error(err);
   }
 });
 
