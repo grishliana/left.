@@ -1,13 +1,8 @@
 // =========================
-// 🚨 CRASH PROTECTION
+// CRASH PROTECTION
 // =========================
-process.on("uncaughtException", (err) => {
-  console.error("Uncaught Exception:", err);
-});
-
-process.on("unhandledRejection", (err) => {
-  console.error("Unhandled Rejection:", err);
-});
+process.on("uncaughtException", console.error);
+process.on("unhandledRejection", console.error);
 
 // =========================
 // ENV
@@ -17,106 +12,283 @@ require("dotenv").config();
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
-// =========================
-// ENV CHECK
-// =========================
 if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
-  console.error("❌ Missing DISCORD_TOKEN or GROQ_API_KEY");
+  console.error("Missing ENV variables");
   process.exit(1);
 }
 
 // =========================
-// DISCORD CLIENT
+// CLIENT
 // =========================
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+    GatewayIntentBits.MessageContent
+  ]
 });
 
-// =========================
-// GROQ CLIENT
-// =========================
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
-  baseURL: "https://api.groq.com/openai/v1",
+  baseURL: "https://api.groq.com/openai/v1"
 });
-
-// =========================
-// CONFIG
-// =========================
-const ALLOWED_CHANNEL_ID = "YOUR_CHANNEL_ID_HERE";
 
 // =========================
 // STATE
 // =========================
-let memory = [];
-let lastReply = "";
-let recentReplies = [];
-let botMessageTimestamps = [];
-
-const MAX_MESSAGES_PER_MIN = 5;
-const WINDOW = 60000;
+const users = {};
+const chatBuffers = new Map();
+const queues = new Map();
+const processing = new Map();
+const lastReply = new Map();
 
 // =========================
-// READY
+// GLOBAL PERSONALITY DRIFT
 // =========================
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-});
+let globalPersonality = 0.5;
+
+setInterval(() => {
+  const drift = (Math.random() - 0.5) * 0.02;
+  globalPersonality = Math.max(0, Math.min(1, globalPersonality + drift));
+}, 60000);
 
 // =========================
 // HELPERS
 // =========================
-function cleanBotHistory() {
-  const now = Date.now();
-  botMessageTimestamps = botMessageTimestamps.filter(
-    (t) => now - t < WINDOW
-  );
+const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
+
+function getUser(id) {
+  if (!users[id]) {
+    users[id] = {
+      friendship: 0,
+      kindness: 0,
+      mood: "neutral",
+      lastSeen: Date.now(),
+      attentionScore: 0,
+
+      // ❤️ relationship system
+      relationship: "stranger",
+      affection: 0,
+      trust: 0,
+      familiarity: 0,
+      emotionalMemory: []
+    };
+  }
+  return users[id];
 }
 
-function makeDiscordLike(text) {
-  if (!text) return "idk";
-
-  let t = text.toLowerCase();
-
-  const swaps = [
-    ["i am", "im"],
-    ["you are", "ur"],
-    ["are you", "r u"],
-    ["what is", "what's"],
-    ["do not", "dont"],
-    ["cannot", "cant"],
-    ["because", "bc"],
-  ];
-
-  for (const [a, b] of swaps) {
-    t = t.replaceAll(a, b);
-  }
-
-  const endings = [" lol", " idk", " tbh"];
-  if (Math.random() < 0.3) {
-    t += endings[Math.floor(Math.random() * endings.length)];
-  }
-
-  return t.replace(/\.$/, "").trim();
+function getBuffer(channelId) {
+  if (!chatBuffers.has(channelId)) chatBuffers.set(channelId, []);
+  return chatBuffers.get(channelId);
 }
 
-function isRepeating(reply) {
-  const cleaned = reply.toLowerCase().trim();
+function getQueue(channelId) {
+  if (!queues.has(channelId)) queues.set(channelId, []);
+  return queues.get(channelId);
+}
 
-  if (cleaned === lastReply.toLowerCase().trim()) return true;
+// =========================
+// RELATIONSHIP SYSTEM
+// =========================
+function computeRelationship(user) {
+  const score = user.affection + user.trust + user.familiarity;
 
-  const spam = ["idk", "lol", "maybe", "hmm", "ok"];
-  if (spam.includes(cleaned)) {
-    if (recentReplies.slice(-3).every((r) => r === cleaned)) {
-      return true;
+  if (score < 5) return "stranger";
+  if (score < 15) return "acquaintance";
+  if (score < 30) return "familiar";
+  if (score < 50) return "friend";
+  if (score < 80) return "close_friend";
+  return "bonded";
+}
+
+function relationshipModifiers(user) {
+  switch (user.relationship) {
+    case "stranger": return { warmth: 0.2, talk: 0.5 };
+    case "acquaintance": return { warmth: 0.4, talk: 0.7 };
+    case "familiar": return { warmth: 0.6, talk: 0.9 };
+    case "friend": return { warmth: 0.75, talk: 1.1 };
+    case "close_friend": return { warmth: 0.9, talk: 1.3 };
+    case "bonded": return { warmth: 1.1, talk: 1.5 };
+    default: return { warmth: 0.5, talk: 1 };
+  }
+}
+
+// =========================
+// EMOTION EVOLUTION
+// =========================
+function updateEmotion(user, message) {
+  const t = message.content.toLowerCase();
+
+  let aff = 0, trust = 0, fam = 0;
+
+  if (t.includes("thanks") || t.includes("lol") || t.includes("nice")) {
+    aff += 1; fam += 1;
+  }
+
+  if (t.includes("shut up") || t.includes("stupid")) {
+    aff -= 3; trust -= 2;
+  }
+
+  if (message.content.length > 30) fam += 1;
+  if (message.content.includes("?")) trust += 1;
+
+  user.affection = clamp(user.affection + aff, -20, 100);
+  user.trust = clamp(user.trust + trust, -20, 100);
+  user.familiarity = clamp(user.familiarity + fam, 0, 100);
+
+  user.kindness += aff;
+  user.kindness = clamp(user.kindness, -10, 10);
+
+  user.mood =
+    user.kindness > 5 ? "warm" :
+    user.kindness < -5 ? "cold" :
+    "neutral";
+
+  user.relationship = computeRelationship(user);
+
+  user.emotionalMemory.push({
+    text: message.content,
+    time: Date.now(),
+    vibe: aff > 0 ? "positive" : aff < 0 ? "negative" : "neutral"
+  });
+
+  if (user.emotionalMemory.length > 20) {
+    user.emotionalMemory.shift();
+  }
+
+  user.lastSeen = Date.now();
+}
+
+// =========================
+// HUMAN DELAY
+// =========================
+function delay(text, user) {
+  let base = 400 + text.length * 15;
+
+  if (user.mood === "cold") base *= 0.7;
+  if (user.mood === "warm") base *= 1.2;
+
+  return Math.min(base + Math.random() * 800, 3500);
+}
+
+// =========================
+// SAFE CHECK
+// =========================
+function isUnsafe(text) {
+  return ["sex","porn","nude","horny","nsfw","18+","kiss","bed"]
+    .some(w => (text || "").toLowerCase().includes(w));
+}
+
+// =========================
+// BUFFER / ACTIVITY
+// =========================
+function activityScore(buffer) {
+  let score = 0;
+  for (const m of buffer.slice(-6)) {
+    if (m.content.includes("?")) score += 0.2;
+    if (m.content.length > 20) score += 0.1;
+  }
+  return Math.min(score, 1);
+}
+
+// =========================
+// PERSONA
+// =========================
+function getPersona(user) {
+  const mod = relationshipModifiers(user);
+
+  let tone =
+    globalPersonality < 0.3 ? "very reserved" :
+    globalPersonality < 0.6 ? "calm balanced" :
+    "warm expressive";
+
+  if (user.mood === "cold") tone += ", distant";
+  if (user.mood === "warm") tone += ", friendly";
+
+  return `
+You are Aliya.
+
+CORE:
+- realistic Discord user
+- emotional memory
+- gradual bonding
+- natural texting
+
+STATE:
+Tone: ${tone}
+Relationship: ${user.relationship}
+Warmth: ${mod.warmth}
+
+RULES:
+- 1–2 sentences max
+- no AI behavior
+`;
+}
+
+// =========================
+// QUEUE PROCESSOR (FIXED SYSTEM)
+// =========================
+async function processQueue(channelId) {
+  if (processing.get(channelId)) return;
+  processing.set(channelId, true);
+
+  const queue = getQueue(channelId);
+
+  while (queue.length > 0) {
+    const { message, user, activity } = queue.shift();
+
+    const last = lastReply.get(user.id) || 0;
+    const wait = Math.max(0, 3500 - (Date.now() - last));
+
+    if (wait > 0) {
+      await new Promise(r => setTimeout(r, wait));
     }
+
+    await new Promise(r =>
+      setTimeout(r, delay(message.content, user))
+    );
+
+    await message.channel.sendTyping();
+
+    const buffer = getBuffer(channelId);
+    const mod = relationshipModifiers(user);
+
+    const res = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 120,
+      temperature: 1.1,
+      messages: [
+        {
+          role: "system",
+          content: getPersona(user)
+        },
+        {
+          role: "user",
+          content: `
+Friendship: ${user.friendship}
+Mood: ${user.mood}
+Relationship: ${user.relationship}
+Warmth: ${mod.warmth}
+Global personality: ${globalPersonality.toFixed(2)}
+
+Chat:
+${buffer.map(m => `${m.user}: ${m.content}`).join("\n")}
+
+Respond naturally like a Discord user.
+`
+        }
+      ]
+    });
+
+    const reply = res?.choices?.[0]?.message?.content || "hm";
+
+    await message.reply(reply);
+
+    lastReply.set(user.id, Date.now());
+    user.friendship++;
   }
 
-  return false;
+  processing.set(channelId, false);
 }
 
 // =========================
@@ -125,73 +297,35 @@ function isRepeating(reply) {
 client.on("messageCreate", async (message) => {
   try {
     if (message.author.bot) return;
-    if (message.channel.id !== ALLOWED_CHANNEL_ID) return;
 
-    const now = Date.now();
+    const user = getUser(message.author.id);
 
-    cleanBotHistory();
-    if (botMessageTimestamps.length >= MAX_MESSAGES_PER_MIN) return;
-
-    const shouldReply =
-      message.content.includes(`<@${client.user.id}>`) ||
-      Math.random() < 0.08;
-
-    if (!shouldReply) return;
-
-    const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
-
-    memory.push({ role: "user", content: prompt });
-    if (memory.length > 25) memory.shift();
-
-    let response;
-
-    try {
-      response = await groq.chat.completions.create({
-        model: "llama-3.3-70b-versatile",
-        max_tokens: 60,
-        temperature: 1,
-        messages: [
-          {
-            role: "system",
-            content: `
-You are a Discord user.
-
-RULES:
-- 1 sentence only
-- no emotions
-- no storytelling
-- short casual replies
-            `,
-          },
-          ...memory,
-          {
-            role: "user",
-            content: prompt || "say something casual",
-          },
-        ],
-      });
-    } catch (err) {
-      console.error(err);
-      return message.reply("im kinda slow rn...");
+    if (isUnsafe(message.content)) {
+      return message.reply("let's not talk about that");
     }
 
-    let reply =
-      response?.choices?.[0]?.message?.content || "hm...";
+    updateEmotion(user, message);
 
-    reply = reply.toLowerCase().split(/[.!?]/)[0];
-    reply = makeDiscordLike(reply);
+    const buffer = getBuffer(message.channel.id);
 
-    if (isRepeating(reply)) reply = "hm...";
+    buffer.push({
+      user: message.author.username,
+      content: message.content
+    });
 
-    lastReply = reply;
-    recentReplies.push(reply);
-    if (recentReplies.length > 10) recentReplies.shift();
+    if (buffer.length > 12) buffer.shift();
 
-    await message.reply(reply);
+    const activity = activityScore(buffer);
 
-    botMessageTimestamps.push(now);
+    if (Math.random() < 0.1) return; // slight human ignore behavior
+
+    const queue = getQueue(message.channel.id);
+    queue.push({ message, user, activity });
+
+    processQueue(message.channel.id);
+
   } catch (err) {
-    console.error(err);
+    console.error("🔥 ERROR:", err);
   }
 });
 
