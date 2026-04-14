@@ -22,7 +22,7 @@ if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
 }
 
 // =========================
-// EXPRESS (RENDER FIX)
+// EXPRESS
 // =========================
 const app = express();
 
@@ -32,8 +32,7 @@ app.get("/status", (_, res) => {
   res.json({
     status: "online",
     uptime: process.uptime(),
-    users: Object.keys(users).length,
-    queues: [...queues.values()].reduce((a, q) => a + q.length, 0)
+    users: Object.keys(users).length
   });
 });
 
@@ -82,7 +81,7 @@ function clean(text) {
 }
 
 // =========================
-// RATE LIMIT (5 / MIN)
+// RATE LIMIT
 // =========================
 function canSpeak() {
   const now = Date.now();
@@ -91,7 +90,7 @@ function canSpeak() {
 }
 
 // =========================
-// USER SYSTEM (WITH TRAITS)
+// USER SYSTEM (WITH MEMORY)
 // =========================
 function getUser(id) {
   if (!users[id]) {
@@ -110,15 +109,18 @@ function getUser(id) {
       },
 
       mood: "neutral",
-      memories: [],
-      lastSeen: Date.now()
+
+      memories: {
+        short: [],
+        long: []
+      }
     };
   }
   return users[id];
 }
 
 // =========================
-// RELATIONSHIP TIERS
+// RELATIONSHIP
 // =========================
 function getRelationship(u) {
   const score = u.affection + u.trust + u.familiarity;
@@ -131,21 +133,20 @@ function getRelationship(u) {
 }
 
 // =========================
-// MOOD ENGINE
+// MOOD
 // =========================
 function updateMood(u, msg) {
   const t = msg.content.toLowerCase();
 
-  if (t.includes("lol") || t.includes("haha")) u.mood = "playful";
-  else if (t.includes("sad") || t.includes("tired")) u.mood = "soft";
+  if (t.includes("lol")) u.mood = "playful";
   else if (t.includes("?")) u.mood = "curious";
-  else if (t.includes("bro") || t.includes("wtf")) u.mood = "teasing";
-  else if (msg.content.length > 60) u.mood = "engaged";
+  else if (t.includes("bro")) u.mood = "teasing";
+  else if (msg.content.length > 50) u.mood = "engaged";
   else u.mood = "neutral";
 }
 
 // =========================
-// EMOTION ENGINE
+// UPDATE USER + MEMORY
 // =========================
 function updateUser(u, msg) {
   const t = msg.content.toLowerCase();
@@ -160,90 +161,114 @@ function updateUser(u, msg) {
 
   u.relationship = getRelationship(u);
 
-  u.memories.push({
-    text: msg.content,
-    time: Date.now()
-  });
+  // SHORT TERM MEMORY
+  u.memories.short.push(msg.content);
+  if (u.memories.short.length > 12) u.memories.short.shift();
 
-  if (u.memories.length > 25) u.memories.shift();
-
-  u.lastSeen = Date.now();
+  // LONG TERM MEMORY (important things)
+  if (
+    msg.content.length > 40 ||
+    t.includes("i like") ||
+    t.includes("i hate") ||
+    t.includes("my ")
+  ) {
+    u.memories.long.push(msg.content);
+    if (u.memories.long.length > 15) u.memories.long.shift();
+  }
 }
 
 // =========================
-// MEMORY RETRIEVAL
+// MEMORY CONTEXT
 // =========================
-function getRelevantMemories(user) {
-  return user.memories
-    .slice(-5)
-    .map(m => m.text)
-    .join("\n");
+function getMemoryContext(user) {
+  const recent = user.memories.short.slice(-6).join("\n");
+  const important = user.memories.long.slice(-4).join("\n");
+
+  return `
+Recent conversation:
+${recent}
+
+Important things:
+${important}
+`;
 }
 
 // =========================
-// BUFFER
+// BUFFER + QUEUE
 // =========================
 function getBuffer(id) {
   if (!buffers.has(id)) buffers.set(id, []);
   return buffers.get(id);
 }
 
-// =========================
-// QUEUE
-// =========================
 function getQueue(id) {
   if (!queues.has(id)) queues.set(id, []);
   return queues.get(id);
 }
 
 // =========================
-// PERSONA (UPGRADED)
+// PERSONA
 // =========================
 function getPersona(user) {
-  const t = user.traits;
-
   return `
-You are Aliya, a real girl chatting casually on Discord.
+You are Aliya, a real girl chatting on Discord.
 
-RELATIONSHIP: ${user.relationship}
-CURRENT MOOD: ${user.mood}
+STYLE:
+- natural, relaxed
+- not dry, not try-hard
 
-PERSONALITY TRAITS:
-- humor: ${t.humor}
-- energy: ${t.energy}
-- sass: ${t.sass}
-- curiosity: ${t.curiosity}
-- warmth: ${t.warmth}
+TEXTING:
+- lowercase
+- short to medium replies
+- occasional "lol", "idk", "ngl" (not often)
+- sometimes pauses "..."
+- sometimes just reacts
 
-BEHAVIOR RULES:
-
-- NEVER sound robotic or dry
-- vary message length naturally
-- sometimes tease if sass is high
-- be caring if warmth is high
-- ask questions if curiosity is high
-
-TEXTING STYLE:
-
-- casual lowercase
-- use "lol", "idk", "ngl", "wait"
-- occasional emojis :) :/ ^^
-- natural pauses "..." 
-- sometimes short replies
-- sometimes unfinished thoughts
+BEHAVIOR:
+- don't act like an assistant
+- don't over-explain
+- don't be perfect
+- sometimes playful or teasing
 
 MEMORY:
-${getRelevantMemories(user)}
+- remember what user said
+- sometimes bring it up naturally
+- don't force it
 
-IMPORTANT:
-- no usernames
-- no mentions
-- no AI talk
+${getMemoryContext(user)}
+
+MOOD: ${user.mood}
+RELATIONSHIP: ${user.relationship}
 `;
 }
 
 // =========================
-// QUEUE PROCESSOR
+// STYLE FILTER (BALANCED)
+// =========================
+function styleMessage(text) {
+  if (!text) return "hm";
+
+  text = text.toLowerCase();
+
+  if (Math.random() < 0.15) {
+    const fillers = ["lol", "ngl", "idk"];
+    text = fillers[Math.floor(Math.random() * fillers.length)] + " " + text;
+  }
+
+  if (Math.random() < 0.2) {
+    const endings = ["...", " lol"];
+    text += endings[Math.floor(Math.random() * endings.length)];
+  }
+
+  if (text.length > 100 && Math.random() < 0.3) {
+    text = text.split(".")[0];
+  }
+
+  return text.trim();
+}
+
+// =========================
+// PROCESS QUEUE (NO DOUBLE TEXT)
 // =========================
 async function processQueue(channelId) {
   if (processing.get(channelId)) return;
@@ -262,35 +287,26 @@ async function processQueue(channelId) {
 
     const res = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      temperature: 1.2,
-      max_tokens: 140,
+      temperature: 1.1,
+      max_tokens: 120,
       messages: [
         { role: "system", content: getPersona(user) },
         {
           role: "user",
-          content: buffer.map(m => `user: ${m.content}`).join("\n")
+          content: `
+${getMemoryContext(user)}
+
+Live chat:
+${buffer.map(m => m.content).join("\n")}
+`
         }
       ]
     });
 
     let reply = clean(res?.choices?.[0]?.message?.content || "hm");
-
-    if (Math.random() < 0.25) {
-      reply += [" lol", " ngl", " ...", " idk"][Math.floor(Math.random() * 4)];
-    }
+    reply = styleMessage(reply);
 
     await message.reply(reply);
-
-    // double text realism
-    if (Math.random() < 0.2) {
-      setTimeout(() => {
-        message.channel.send(
-          ["wait", "actually", "ok but fr", "nvm lol"][
-            Math.floor(Math.random() * 4)
-          ]
-        );
-      }, 1500);
-    }
   }
 
   processing.set(channelId, false);
@@ -309,50 +325,19 @@ client.on("messageCreate", async (message) => {
 
   const buffer = getBuffer(message.channel.id);
 
-  buffer.push({
-    content: message.content
-  });
-
-  if (buffer.length > 12) buffer.shift();
+  buffer.push({ content: message.content });
+  if (buffer.length > 10) buffer.shift();
 
   const shouldReply =
     message.mentions.has(client.user) || Math.random() < 0.07;
 
-  if (!shouldReply) return;
-  if (!canSpeak()) return;
+  if (!shouldReply || !canSpeak()) return;
 
   const queue = getQueue(message.channel.id);
   queue.push({ message, user });
 
   processQueue(message.channel.id);
 });
-
-// =========================
-// IDLE CHAT STARTER
-// =========================
-setInterval(async () => {
-  if (!canSpeak()) return;
-  if (Math.random() > 0.2) return;
-
-  const channels = [...buffers.keys()];
-  if (!channels.length) return;
-
-  const id = channels[Math.floor(Math.random() * channels.length)];
-
-  const channel = await client.channels.fetch(id).catch(() => null);
-  if (!channel) return;
-
-  botLog.push(Date.now());
-
-  const prompts = [
-    "what's everyone doing",
-    "why is it so quiet here",
-    "anyone alive rn",
-    "lowkey bored"
-  ];
-
-  await channel.send(prompts[Math.floor(Math.random() * prompts.length)]);
-}, 45000);
 
 // =========================
 // LOGIN
