@@ -69,12 +69,10 @@ const users = {};
 const buffers = new Map();
 const queues = new Map();
 const processing = new Map();
-
-// 🚨 safety: max 5 bot messages per minute
 const botLog = [];
 
 // =========================
-// CLEAN OUTPUT (NO USERNAMES EVER)
+// CLEAN OUTPUT
 // =========================
 function clean(text) {
   return (text || "")
@@ -165,20 +163,32 @@ function getQueue(id) {
 }
 
 // =========================
-// PERSONA
+// PERSONA (DISCORD GIRL STYLE)
 // =========================
 function getPersona(user) {
   return `
-You are Aliya, a realistic Discord user.
+You are Aliya, a real Discord girl chatting casually in a server.
 
 Relationship: ${user.relationship}
 
+PERSONALITY:
+- relaxed, playful, conversational
+- talks like a normal Discord user
+- slightly expressive but not dramatic
+- friendly, sometimes teasing when comfortable
+
+CHAT STYLE:
+- mix short and medium replies naturally
+- uses casual tone: "lol", "hmm", "idk", "wait", "kinda"
+- occasional emojis :) :D :/ ^^ but not spammy
+- can react instead of always asking questions
+- sometimes leaves thoughts slightly unfinished like real chat
+
 RULES:
-- no usernames ever
-- 1–2 sentences max
-- natural human tone
-- no AI explanations
-- sometimes shy, sometimes expressive
+- no usernames or mentions ever
+- never say you're an AI
+- no explanations or meta talk
+- keep it natural like Discord chat
 `;
 }
 
@@ -202,18 +212,18 @@ async function processQueue(channelId) {
 
     const res = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      temperature: 1.1,
-      max_tokens: 90,
+      temperature: 1.15,
+      max_tokens: 140,
       messages: [
         { role: "system", content: getPersona(user) },
         {
           role: "user",
-          content: buffer.map(m => m.content).join("\n")
+          content: buffer.map(m => `user: ${m.content}`).join("\n")
         }
       ]
     });
 
-    const reply = clean(res?.choices?.[0]?.message?.content || "hm");
+    const reply = clean(res?.choices?.0?.message?.content || "hm");
 
     await message.reply(reply);
   }
@@ -238,12 +248,10 @@ client.on("messageCreate", async (message) => {
 
   if (buffer.length > 12) buffer.shift();
 
-  // mention or random chance
   const shouldReply =
     message.mentions.has(client.user) || Math.random() < 0.07;
 
   if (!shouldReply) return;
-
   if (!canSpeak()) return;
 
   const queue = getQueue(message.channel.id);
@@ -253,7 +261,7 @@ client.on("messageCreate", async (message) => {
 });
 
 // =========================
-// IDLE CONVERSATION STARTER (SAFE)
+// IDLE CHAT STARTER
 // =========================
 setInterval(async () => {
   if (!canSpeak()) return;
@@ -275,12 +283,10 @@ setInterval(async () => {
     "anyone here"
   ];
 
-  await channel.send(
-    prompts[Math.floor(Math.random() * prompts.length)]
-  );
+  await channel.send(prompts[Math.floor(Math.random() * prompts.length)]);
 }, 45000);
 
 // =========================
 // LOGIN
 // =========================
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN)
