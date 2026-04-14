@@ -91,7 +91,7 @@ function canSpeak() {
 }
 
 // =========================
-// USER SYSTEM
+// USER SYSTEM (WITH TRAITS)
 // =========================
 function getUser(id) {
   if (!users[id]) {
@@ -100,6 +100,16 @@ function getUser(id) {
       trust: 0,
       familiarity: 0,
       relationship: "stranger",
+
+      traits: {
+        humor: Math.random(),
+        energy: Math.random(),
+        sass: Math.random(),
+        curiosity: Math.random(),
+        warmth: Math.random()
+      },
+
+      mood: "neutral",
       memories: [],
       lastSeen: Date.now()
     };
@@ -118,6 +128,20 @@ function getRelationship(u) {
   if (score < 30) return "familiar";
   if (score < 60) return "friend";
   return "close_friend";
+}
+
+// =========================
+// MOOD ENGINE
+// =========================
+function updateMood(u, msg) {
+  const t = msg.content.toLowerCase();
+
+  if (t.includes("lol") || t.includes("haha")) u.mood = "playful";
+  else if (t.includes("sad") || t.includes("tired")) u.mood = "soft";
+  else if (t.includes("?")) u.mood = "curious";
+  else if (t.includes("bro") || t.includes("wtf")) u.mood = "teasing";
+  else if (msg.content.length > 60) u.mood = "engaged";
+  else u.mood = "neutral";
 }
 
 // =========================
@@ -147,6 +171,16 @@ function updateUser(u, msg) {
 }
 
 // =========================
+// MEMORY RETRIEVAL
+// =========================
+function getRelevantMemories(user) {
+  return user.memories
+    .slice(-5)
+    .map(m => m.text)
+    .join("\n");
+}
+
+// =========================
 // BUFFER
 // =========================
 function getBuffer(id) {
@@ -163,32 +197,48 @@ function getQueue(id) {
 }
 
 // =========================
-// PERSONA (DISCORD GIRL STYLE)
+// PERSONA (UPGRADED)
 // =========================
 function getPersona(user) {
+  const t = user.traits;
+
   return `
-You are Aliya, a real Discord girl chatting casually in a server.
+You are Aliya, a real girl chatting casually on Discord.
 
-Relationship: ${user.relationship}
+RELATIONSHIP: ${user.relationship}
+CURRENT MOOD: ${user.mood}
 
-PERSONALITY:
-- relaxed, playful, conversational
-- talks like a normal Discord user
-- slightly expressive but not dramatic
-- friendly, sometimes teasing when comfortable
+PERSONALITY TRAITS:
+- humor: ${t.humor}
+- energy: ${t.energy}
+- sass: ${t.sass}
+- curiosity: ${t.curiosity}
+- warmth: ${t.warmth}
 
-CHAT STYLE:
-- mix short and medium replies naturally
-- uses casual tone: "lol", "hmm", "idk", "wait", "kinda"
-- occasional emojis :) :D :/ ^^ but not spammy
-- can react instead of always asking questions
-- sometimes leaves thoughts slightly unfinished like real chat
+BEHAVIOR RULES:
 
-RULES:
-- no usernames or mentions ever
-- never say you're an AI
-- no explanations or meta talk
-- keep it natural like Discord chat
+- NEVER sound robotic or dry
+- vary message length naturally
+- sometimes tease if sass is high
+- be caring if warmth is high
+- ask questions if curiosity is high
+
+TEXTING STYLE:
+
+- casual lowercase
+- use "lol", "idk", "ngl", "wait"
+- occasional emojis :) :/ ^^
+- natural pauses "..." 
+- sometimes short replies
+- sometimes unfinished thoughts
+
+MEMORY:
+${getRelevantMemories(user)}
+
+IMPORTANT:
+- no usernames
+- no mentions
+- no AI talk
 `;
 }
 
@@ -212,7 +262,7 @@ async function processQueue(channelId) {
 
     const res = await groq.chat.completions.create({
       model: "llama-3.3-70b-versatile",
-      temperature: 1.15,
+      temperature: 1.2,
       max_tokens: 140,
       messages: [
         { role: "system", content: getPersona(user) },
@@ -223,9 +273,24 @@ async function processQueue(channelId) {
       ]
     });
 
-    const reply = clean(res?.choices?.0?.message?.content || "hm");
+    let reply = clean(res?.choices?.[0]?.message?.content || "hm");
+
+    if (Math.random() < 0.25) {
+      reply += [" lol", " ngl", " ...", " idk"][Math.floor(Math.random() * 4)];
+    }
 
     await message.reply(reply);
+
+    // double text realism
+    if (Math.random() < 0.2) {
+      setTimeout(() => {
+        message.channel.send(
+          ["wait", "actually", "ok but fr", "nvm lol"][
+            Math.floor(Math.random() * 4)
+          ]
+        );
+      }, 1500);
+    }
   }
 
   processing.set(channelId, false);
@@ -238,7 +303,9 @@ client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const user = getUser(message.author.id);
+
   updateUser(user, message);
+  updateMood(user, message);
 
   const buffer = getBuffer(message.channel.id);
 
@@ -278,9 +345,10 @@ setInterval(async () => {
   botLog.push(Date.now());
 
   const prompts = [
-    "what's everyone up to",
-    "this place is kinda quiet",
-    "anyone here"
+    "what's everyone doing",
+    "why is it so quiet here",
+    "anyone alive rn",
+    "lowkey bored"
   ];
 
   await channel.send(prompts[Math.floor(Math.random() * prompts.length)]);
@@ -289,4 +357,4 @@ setInterval(async () => {
 // =========================
 // LOGIN
 // =========================
-client.login(process.env.DISCORD_TOKEN)
+client.login(process.env.DISCORD_TOKEN);
