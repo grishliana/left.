@@ -25,7 +25,6 @@ if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
 // EXPRESS
 // =========================
 const app = express();
-
 app.get("/", (_, res) => res.send("Bot running"));
 
 const PORT = process.env.PORT || 3000;
@@ -58,7 +57,7 @@ const groq = new OpenAI({
 const users = {};
 const buffers = new Map();
 const queues = new Map();
-const processing = new Map();
+const activeChannels = new Set(); // ✅ HARD LOCK (fixes double text)
 const botLog = [];
 const lastReplyTime = new Map();
 const lastReplies = new Map();
@@ -113,14 +112,11 @@ function updateUser(u, msg) {
   if (t.includes("?")) u.trust++;
   if (msg.content.length > 30) u.familiarity++;
 
-  u.affection = Math.max(-20, Math.min(100, u.affection));
-  u.trust = Math.max(-20, Math.min(100, u.trust));
-  u.familiarity = Math.max(0, Math.min(100, u.familiarity));
-
-  if (t.includes("lol")) u.mood = "playful";
-  else if (t.includes("?")) u.mood = "curious";
-  else if (t.includes("bro")) u.mood = "teasing";
-  else u.mood = "neutral";
+  u.mood =
+    t.includes("lol") ? "playful" :
+    t.includes("?") ? "curious" :
+    t.includes("bro") ? "teasing" :
+    "neutral";
 
   u.memories.short.push(msg.content);
   if (u.memories.short.length > 12) u.memories.short.shift();
@@ -137,7 +133,7 @@ function updateUser(u, msg) {
 }
 
 // =========================
-// MEMORY CONTEXT
+// MEMORY
 // =========================
 function getMemoryContext(user) {
   return `
@@ -150,13 +146,8 @@ ${user.memories.long.slice(-4).join("\n")}
 }
 
 // =========================
-// BUFFER / QUEUE
+// QUEUE
 // =========================
-function getBuffer(id) {
-  if (!buffers.has(id)) buffers.set(id, []);
-  return buffers.get(id);
-}
-
 function getQueue(id) {
   if (!queues.has(id)) queues.set(id, []);
   return queues.get(id);
@@ -166,19 +157,10 @@ function getQueue(id) {
 // INTENT SYSTEM
 // =========================
 function getIntent() {
-  const intents = [
-    "react",
-    "ask_question",
-    "tease",
-    "share_opinion",
-    "change_topic"
-  ];
+  const intents = ["react", "ask_question", "tease", "share_opinion", "change_topic"];
   return intents[Math.floor(Math.random() * intents.length)];
 }
 
-// =========================
-// TOPIC SHIFT
-// =========================
 function maybeShiftTopic() {
   return Math.random() < 0.25;
 }
@@ -188,34 +170,26 @@ function maybeShiftTopic() {
 // =========================
 function getPersona(user, intent, shift) {
   return `
-You are Aliya, a real girl chatting on Discord.
+You are Aliya, a real Discord girl.
 
 STYLE:
-- natural, relaxed, human
-- not dry, not over-energetic
-
-TEXTING:
-- lowercase
-- mix of short and medium replies
-- occasional "lol", "idk", "ngl"
-- sometimes pauses "..."
+- natural, human, lowercase
+- not repetitive or robotic
 
 BEHAVIOR:
-- not an assistant
-- imperfect, human
+- imperfect
+- conversational
 - sometimes playful, sometimes chill
 
-MEMORY USAGE:
-- reference past things naturally sometimes
-- don't repeat yourself
-- build on conversations
-- if convo gets repetitive, shift naturally
+IMPORTANT:
+- avoid repeating ideas
+- shift topic if conversation feels stale
+- don't over-explain
 
 INTENT: ${intent}
-TOPIC: ${shift ? "shift topic slightly" : "stay on topic"}
+TOPIC SHIFT: ${shift ? "yes" : "no"}
 
 MOOD: ${user.mood}
-RELATIONSHIP: ${user.relationship}
 
 MEMORY:
 ${getMemoryContext(user)}
@@ -223,24 +197,15 @@ ${getMemoryContext(user)}
 }
 
 // =========================
-// STYLE + DIVERSITY
+// VARIATION ENGINE
 // =========================
-const shortReplies = [
-  "lol", "idk", "fr", "nah", "wait", "lowkey",
-  "tbh", "kinda", "real", "huh", "ok", "yeah", "maybe"
-];
-
-const reactions = [
-  "??", "what", "no way", "nahh", "fr?",
-  "wait what", "you serious?", "bro", "lmao what"
-];
+const shortReplies = ["lol","idk","fr","nah","wait","tbh","kinda","real","ok","yeah","maybe"];
+const reactions = ["??","what","no way","nahh","fr?","wait what","bro","lmao what"];
 
 function diversifyMessage(userId, text) {
   text = text.toLowerCase();
 
-  const type = ["short", "normal", "reaction"][
-    Math.floor(Math.random() * 3)
-  ];
+  const type = ["short","normal","reaction"][Math.floor(Math.random()*3)];
 
   if (type === "short" && Math.random() < 0.4) {
     text = shortReplies[Math.floor(Math.random() * shortReplies.length)];
@@ -250,11 +215,6 @@ function diversifyMessage(userId, text) {
     text = reactions[Math.floor(Math.random() * reactions.length)];
   }
 
-  if (Math.random() < 0.2) {
-    text += ["...", " lol"][Math.floor(Math.random() * 2)];
-  }
-
-  // human imperfection (cut off)
   if (Math.random() < 0.15) {
     text = text.split(" ").slice(0, -1).join(" ");
   }
@@ -262,7 +222,6 @@ function diversifyMessage(userId, text) {
   if (!lastReplies.has(userId)) lastReplies.set(userId, []);
   const history = lastReplies.get(userId);
 
-  // pattern-level anti-repeat
   if (history.some(h => h.slice(0, 10) === text.slice(0, 10))) {
     text += " idk why but yeah";
   }
@@ -274,61 +233,70 @@ function diversifyMessage(userId, text) {
 }
 
 // =========================
-// PROCESS QUEUE
+// PROCESS QUEUE (BUG-FREE CORE)
 // =========================
 async function processQueue(channelId) {
-  if (processing.get(channelId)) return;
-  processing.set(channelId, true);
+  if (activeChannels.has(channelId)) return; // ✅ HARD LOCK
+  activeChannels.add(channelId);
 
   const queue = getQueue(channelId);
 
-  while (queue.length > 0) {
-    const { message, user } = queue.shift();
+  try {
+    while (queue.length > 0) {
+      const { message, user } = queue.shift();
 
-    if (!canSpeak()) continue;
+      if (!canSpeak()) {
+        await sleep(1000);
+        queue.unshift({ message, user });
+        continue;
+      }
 
-    const now = Date.now();
-    const last = lastReplyTime.get(channelId) || 0;
-    if (now - last < 4000) continue;
-    lastReplyTime.set(channelId, now);
+      const now = Date.now();
+      const last = lastReplyTime.get(channelId) || 0;
 
-    botLog.push(Date.now());
+      if (now - last < 4000) {
+        await sleep(1000);
+        queue.unshift({ message, user });
+        continue;
+      }
 
-    const buffer = getBuffer(channelId);
+      lastReplyTime.set(channelId, now);
+      botLog.push(now);
 
-    const intent = getIntent();
-    const shift = maybeShiftTopic();
+      const intent = getIntent();
+      const shift = maybeShiftTopic();
 
-    const res = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      temperature: 1.2,
-      max_tokens: 120,
-      messages: [
-        { role: "system", content: getPersona(user, intent, shift) },
-        {
-          role: "user",
-          content: `
+      const res = await groq.chat.completions.create({
+        model: "llama-3.3-70b-versatile",
+        temperature: 1.2,
+        max_tokens: 120,
+        messages: [
+          { role: "system", content: getPersona(user, intent, shift) },
+          {
+            role: "user",
+            content: `
 ${getMemoryContext(user)}
 
 Chat:
-${buffer.map(m => m.content).join("\n")}
+${message.content}
 `
-        }
-      ]
-    });
+          }
+        ]
+      });
 
-    let reply = clean(res?.choices?.[0]?.message?.content || "hm");
-    reply = diversifyMessage(message.author.id, reply);
+      let reply = clean(res?.choices?.[0]?.message?.content || "hm");
+      reply = diversifyMessage(message.author.id, reply);
 
-    const delay = Math.min(3000, 500 + reply.length * 25);
+      const delay = Math.min(3000, 500 + reply.length * 25);
 
-    await message.channel.sendTyping();
-    await sleep(delay);
+      await message.channel.sendTyping();
+      await sleep(delay);
 
-    await message.reply(reply);
+      await message.reply(reply);
+    }
+  } finally {
+    activeChannels.delete(channelId); // ✅ ALWAYS RELEASE LOCK
   }
-
-  processing.set(channelId, false);
 }
 
 // =========================
@@ -340,22 +308,12 @@ client.on("messageCreate", async (message) => {
   const user = getUser(message.author.id);
   updateUser(user, message);
 
-  const buffer = getBuffer(message.channel.id);
-  buffer.push({ content: message.content });
-  if (buffer.length > 10) buffer.shift();
-
-  const shouldReply =
-    message.mentions.has(client.user) ||
-    (Math.random() < 0.07 && message.content.length > 3);
-
-  if (!shouldReply || !canSpeak()) return;
-
   const queue = getQueue(message.channel.id);
+
   queue.push({ message, user });
 
-  if (!processing.get(message.channel.id)) {
-    processQueue(message.channel.id);
-  }
+  // ❌ no overlapping triggers anymore
+  processQueue(message.channel.id);
 });
 
 // =========================
