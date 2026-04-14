@@ -13,25 +13,28 @@ const express = require("express");
 const { Client, GatewayIntentBits } = require("discord.js");
 const OpenAI = require("openai");
 
+// =========================
+// SAFETY CHECK
+// =========================
 if (!process.env.DISCORD_TOKEN || !process.env.GROQ_API_KEY) {
   console.error("Missing ENV variables");
   process.exit(1);
 }
 
 // =========================
-// EXPRESS SERVER (RENDER FIX)
+// EXPRESS (RENDER FIX)
 // =========================
 const app = express();
 
 app.get("/", (req, res) => {
-  res.send("🤖 Aliya bot is running");
+  res.send("🤖 Bot running");
 });
 
 app.get("/status", (req, res) => {
   res.json({
     status: "online",
     uptime: process.uptime(),
-    usersTracked: Object.keys(users).length,
+    usersTracked: users ? Object.keys(users).length : 0,
     queueSize: [...queues.values()].reduce((a, q) => a + q.length, 0)
   });
 });
@@ -39,7 +42,7 @@ app.get("/status", (req, res) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, "0.0.0.0", () => {
-  console.log(`🌐 Web server running on port ${PORT}`);
+  console.log(`🌐 Server running on ${PORT}`);
 });
 
 // =========================
@@ -53,6 +56,9 @@ const client = new Client({
   ]
 });
 
+// =========================
+// GROQ
+// =========================
 const groq = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
   baseURL: "https://api.groq.com/openai/v1"
@@ -68,20 +74,41 @@ const processing = new Map();
 const lastReply = new Map();
 
 // =========================
-// GLOBAL PERSONALITY DRIFT
+// CLEANUP SYSTEM (IMPORTANT)
 // =========================
-let globalPersonality = 0.5;
-
 setInterval(() => {
-  const drift = (Math.random() - 0.5) * 0.02;
-  globalPersonality = Math.max(0, Math.min(1, globalPersonality + drift));
+  const now = Date.now();
+
+  // remove inactive users
+  for (const id in users) {
+    if (now - users[id].lastSeen > 1000 * 60 * 60 * 6) {
+      delete users[id];
+    }
+  }
+
+  // trim buffers
+  for (const [id, buffer] of chatBuffers.entries()) {
+    if (buffer.length > 50) {
+      buffer.splice(0, buffer.length - 12);
+    }
+  }
+}, 3600000);
+
+// =========================
+// FIX STUCK QUEUES
+// =========================
+setInterval(() => {
+  for (const [channelId, running] of processing.entries()) {
+    if (running) {
+      console.log("⚠️ Reset stuck queue:", channelId);
+      processing.set(channelId, false);
+    }
+  }
 }, 60000);
 
 // =========================
 // HELPERS
 // =========================
-const clamp = (v, min, max) => Math.max(min, Math.min(max, v));
-
 function getUser(id) {
   if (!users[id]) {
     users[id] = {
@@ -89,8 +116,6 @@ function getUser(id) {
       kindness: 0,
       mood: "neutral",
       lastSeen: Date.now(),
-      attentionScore: 0,
-      relationship: "stranger",
       affection: 0,
       trust: 0,
       familiarity: 0,
@@ -100,21 +125,21 @@ function getUser(id) {
   return users[id];
 }
 
-function getBuffer(channelId) {
-  if (!chatBuffers.has(channelId)) chatBuffers.set(channelId, []);
-  return chatBuffers.get(channelId);
+function getBuffer(id) {
+  if (!chatBuffers.has(id)) chatBuffers.set(id, []);
+  return chatBuffers.get(id);
 }
 
-function getQueue(channelId) {
-  if (!queues.has(channelId)) queues.set(channelId, []);
-  return queues.get(channelId);
+function getQueue(id) {
+  if (!queues.has(id)) queues.set(id, []);
+  return queues.get(id);
 }
 
 // =========================
 // RELATIONSHIP SYSTEM
 // =========================
-function computeRelationship(user) {
-  const score = user.affection + user.trust + user.familiarity;
+function computeRelationship(u) {
+  const score = u.affection + u.trust + u.familiarity;
 
   if (score < 5) return "stranger";
   if (score < 15) return "acquaintance";
@@ -124,114 +149,48 @@ function computeRelationship(user) {
   return "bonded";
 }
 
-function relationshipModifiers(user) {
-  switch (user.relationship) {
-    case "stranger": return { warmth: 0.2, talk: 0.5 };
-    case "acquaintance": return { warmth: 0.4, talk: 0.7 };
-    case "familiar": return { warmth: 0.6, talk: 0.9 };
-    case "friend": return { warmth: 0.75, talk: 1.1 };
-    case "close_friend": return { warmth: 0.9, talk: 1.3 };
-    case "bonded": return { warmth: 1.1, talk: 1.5 };
-    default: return { warmth: 0.5, talk: 1 };
-  }
-}
-
 // =========================
-// EMOTION EVOLUTION
+// EMOTION UPDATE
 // =========================
-function updateEmotion(user, message) {
-  const t = message.content.toLowerCase();
+function updateEmotion(user, msg) {
+  const t = msg.content.toLowerCase();
 
   let aff = 0, trust = 0, fam = 0;
 
-  if (t.includes("thanks") || t.includes("lol") || t.includes("nice")) {
-    aff += 1; fam += 1;
-  }
+  if (t.includes("thanks") || t.includes("lol")) aff++;
+  if (t.includes("?")) trust++;
+  if (msg.content.length > 30) fam++;
 
-  if (t.includes("shut up") || t.includes("stupid")) {
-    aff -= 3; trust -= 2;
-  }
+  user.affection += aff;
+  user.trust += trust;
+  user.familiarity += fam;
 
-  if (message.content.length > 30) fam += 1;
-  if (message.content.includes("?")) trust += 1;
-
-  user.affection = clamp(user.affection + aff, -20, 100);
-  user.trust = clamp(user.trust + trust, -20, 100);
-  user.familiarity = clamp(user.familiarity + fam, 0, 100);
-
-  user.kindness += aff;
-  user.kindness = clamp(user.kindness, -10, 10);
-
-  user.mood =
-    user.kindness > 5 ? "warm" :
-    user.kindness < -5 ? "cold" :
-    "neutral";
+  user.affection = Math.max(-20, Math.min(100, user.affection));
+  user.trust = Math.max(-20, Math.min(100, user.trust));
+  user.familiarity = Math.max(0, Math.min(100, user.familiarity));
 
   user.relationship = computeRelationship(user);
-
-  user.emotionalMemory.push({
-    text: message.content,
-    time: Date.now(),
-    vibe: aff > 0 ? "positive" : aff < 0 ? "negative" : "neutral"
-  });
-
-  if (user.emotionalMemory.length > 20) {
-    user.emotionalMemory.shift();
-  }
-
   user.lastSeen = Date.now();
+
+  user.emotionalMemory.push(msg.content);
+  if (user.emotionalMemory.length > 20) user.emotionalMemory.shift();
 }
 
 // =========================
-// HUMAN DELAY
+// SAFE GROQ CALL
 // =========================
-function delay(text, user) {
-  let base = 400 + text.length * 15;
-
-  if (user.mood === "cold") base *= 0.7;
-  if (user.mood === "warm") base *= 1.2;
-
-  return Math.min(base + Math.random() * 800, 3500);
-}
-
-// =========================
-// SAFE CHECK
-// =========================
-function isUnsafe(text) {
-  return ["sex","porn","nude","horny","nsfw","18+","kiss","bed"]
-    .some(w => (text || "").toLowerCase().includes(w));
-}
-
-// =========================
-// BUFFER ACTIVITY
-// =========================
-function activityScore(buffer) {
-  let score = 0;
-  for (const m of buffer.slice(-6)) {
-    if (m.content.includes("?")) score += 0.2;
-    if (m.content.length > 20) score += 0.1;
+async function safeGroq(messages) {
+  try {
+    return await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      max_tokens: 120,
+      temperature: 1.1,
+      messages
+    });
+  } catch (err) {
+    console.error("Groq error:", err);
+    return null;
   }
-  return Math.min(score, 1);
-}
-
-// =========================
-// PERSONA
-// =========================
-function getPersona(user) {
-  const mod = relationshipModifiers(user);
-
-  return `
-You are Aliya.
-
-Tone: ${globalPersonality < 0.6 ? "calm" : "warm expressive"}
-Relationship: ${user.relationship}
-Warmth: ${mod.warmth}
-
-RULES:
-- 1–2 sentences max
-- realistic Discord user
-- emotional memory
-`;
 }
 
 // =========================
@@ -245,21 +204,18 @@ async function processQueue(channelId) {
 
   while (queue.length > 0) {
     const { message, user } = queue.shift();
-
     const buffer = getBuffer(channelId);
 
-    const res = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      max_tokens: 120,
-      temperature: 1.1,
-      messages: [
-        { role: "system", content: getPersona(user) },
-        {
-          role: "user",
-          content: buffer.map(m => `${m.user}: ${m.content}`).join("\n")
-        }
-      ]
-    });
+    const res = await safeGroq([
+      {
+        role: "system",
+        content: "You are Aliya, a realistic Discord user. 1–2 sentences max."
+      },
+      {
+        role: "user",
+        content: buffer.map(m => `${m.user}: ${m.content}`).join("\n")
+      }
+    ]);
 
     const reply = res?.choices?.[0]?.message?.content || "hm";
 
@@ -281,10 +237,6 @@ client.on("messageCreate", async (message) => {
 
     const user = getUser(message.author.id);
 
-    if (isUnsafe(message.content)) {
-      return message.reply("let's not talk about that");
-    }
-
     updateEmotion(user, message);
 
     const buffer = getBuffer(message.channel.id);
@@ -304,11 +256,16 @@ client.on("messageCreate", async (message) => {
     processQueue(message.channel.id);
 
   } catch (err) {
-    console.error(err);
+    console.error("Message error:", err);
   }
 });
 
 // =========================
-// LOGIN
+// LOGIN (SAFE)
 // =========================
-client.login(process.env.DISCORD_TOKEN);
+client.login(process.env.DISCORD_TOKEN)
+  .then(() => console.log("✅ Bot logged in"))
+  .catch(err => {
+    console.error("Login failed:", err);
+    process.exit(1);
+  });
