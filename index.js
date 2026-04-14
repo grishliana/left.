@@ -55,12 +55,14 @@ const groq = new OpenAI({
 // STATE
 // =========================
 const users = {};
-const buffers = new Map();
 const queues = new Map();
-const activeChannels = new Set(); // ✅ HARD LOCK (fixes double text)
+const activeChannels = new Set();
+
 const botLog = [];
 const lastReplyTime = new Map();
 const lastReplies = new Map();
+const recentTopics = new Map();
+const recentBotReplies = new Map();
 
 // =========================
 // UTIL
@@ -94,7 +96,6 @@ function getUser(id) {
       affection: 0,
       trust: 0,
       familiarity: 0,
-      relationship: "stranger",
       mood: "neutral",
       memories: { short: [], long: [] }
     };
@@ -162,34 +163,55 @@ function getIntent() {
 }
 
 function maybeShiftTopic() {
-  return Math.random() < 0.25;
+  return Math.random() < 0.3;
 }
 
 // =========================
-// PERSONA
+// SIMILARITY CHECK (REAL FIX)
 // =========================
-function getPersona(user, intent, shift) {
+function isTooSimilar(a, b) {
+  if (!a || !b) return false;
+
+  const setA = new Set(a.split(" "));
+  const setB = new Set(b.split(" "));
+
+  let overlap = 0;
+  setA.forEach(w => {
+    if (setB.has(w)) overlap++;
+  });
+
+  return overlap / Math.max(setA.size, 1) > 0.6;
+}
+
+// =========================
+// PERSONA (ANTI-REPEAT CONTROLLED)
+// =========================
+function getPersona(user, intent, shift, lastBotReply) {
   return `
 You are Aliya, a real Discord girl.
 
+CRITICAL RULES:
+- NEVER repeat ideas or phrasing from earlier replies
+- NEVER use the same conversational pattern twice in a row
+- If repetition risk is high → change topic immediately
+- Avoid filler-only replies ("lol", "idk") as full responses
+- Always move conversation forward
+
+CONVERSATION CONTROL:
+- If stable → introduce new angle or question
+- If repetitive → shift topic aggressively
+- If user repeats → respond differently each time
+
 STYLE:
-- natural, human, lowercase
-- not repetitive or robotic
-
-BEHAVIOR:
-- imperfect
-- conversational
-- sometimes playful, sometimes chill
-
-IMPORTANT:
-- avoid repeating ideas
-- shift topic if conversation feels stale
-- don't over-explain
+- natural, lowercase texting
+- short but meaningful responses
+- human imperfection allowed
 
 INTENT: ${intent}
 TOPIC SHIFT: ${shift ? "yes" : "no"}
 
-MOOD: ${user.mood}
+LAST BOT MESSAGE:
+${lastBotReply || "none"}
 
 MEMORY:
 ${getMemoryContext(user)}
@@ -207,23 +229,23 @@ function diversifyMessage(userId, text) {
 
   const type = ["short","normal","reaction"][Math.floor(Math.random()*3)];
 
-  if (type === "short" && Math.random() < 0.4) {
+  if (type === "short" && Math.random() < 0.3) {
     text = shortReplies[Math.floor(Math.random() * shortReplies.length)];
   }
 
-  if (type === "reaction" && Math.random() < 0.3) {
+  if (type === "reaction" && Math.random() < 0.25) {
     text = reactions[Math.floor(Math.random() * reactions.length)];
   }
 
-  if (Math.random() < 0.15) {
+  if (Math.random() < 0.12) {
     text = text.split(" ").slice(0, -1).join(" ");
   }
 
   if (!lastReplies.has(userId)) lastReplies.set(userId, []);
   const history = lastReplies.get(userId);
 
-  if (history.some(h => h.slice(0, 10) === text.slice(0, 10))) {
-    text += " idk why but yeah";
+  if (history.some(h => isTooSimilar(h, text))) {
+    text += " ...idk";
   }
 
   history.push(text);
@@ -233,10 +255,10 @@ function diversifyMessage(userId, text) {
 }
 
 // =========================
-// PROCESS QUEUE (BUG-FREE CORE)
+// PROCESS QUEUE (BUG FREE CORE)
 // =========================
 async function processQueue(channelId) {
-  if (activeChannels.has(channelId)) return; // ✅ HARD LOCK
+  if (activeChannels.has(channelId)) return;
   activeChannels.add(channelId);
 
   const queue = getQueue(channelId);
@@ -266,12 +288,20 @@ async function processQueue(channelId) {
       const intent = getIntent();
       const shift = maybeShiftTopic();
 
+      const lastBotReply = recentBotReplies.get(channelId) || "";
+      recentBotReplies.set(channelId, message.content);
+
+      recentTopics.set(channelId, intent);
+
       const res = await groq.chat.completions.create({
         model: "llama-3.3-70b-versatile",
-        temperature: 1.2,
+        temperature: 1.25,
         max_tokens: 120,
         messages: [
-          { role: "system", content: getPersona(user, intent, shift) },
+          {
+            role: "system",
+            content: getPersona(user, intent, shift, lastBotReply)
+          },
           {
             role: "user",
             content: `
@@ -295,7 +325,7 @@ ${message.content}
       await message.reply(reply);
     }
   } finally {
-    activeChannels.delete(channelId); // ✅ ALWAYS RELEASE LOCK
+    activeChannels.delete(channelId);
   }
 }
 
@@ -309,10 +339,8 @@ client.on("messageCreate", async (message) => {
   updateUser(user, message);
 
   const queue = getQueue(message.channel.id);
-
   queue.push({ message, user });
 
-  // ❌ no overlapping triggers anymore
   processQueue(message.channel.id);
 });
 
